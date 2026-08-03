@@ -62,21 +62,25 @@ You can configure the default vision model and whether to enable thinking when d
 
 The extension ships with built-in definitions for the following TokenRhythm chat models (sourced from the [model page](https://tokenrhythm.studio/models)):
 
-| Model ID | Context | Max Output | Vision |
-|----------|---------|-----------|--------|
-| `deepseek-v4-pro` | 1M | 384K | ❌ |
-| `deepseek-v4-flash` | 1M | 384K | ❌ |
-| `deepseek-v4-flash-0731` | 1M | 384K | ❌ |
-| `glm-5.2` | 1M | 128K | ❌ |
-| `glm-5.1` | 200K | 128K | ❌ |
-| `glm-5` | 1M | 128K | ❌ |
-| `kimi-k2.7-code` | 256K | 128K | ✅ |
-| `kimi-k2.6` | 256K | 128K | ✅ |
-| `kimi-k2.5` | 256K | 64K | ✅ |
-| `mimo-v2.5-pro` | 256K | 256K | ❌ |
-| `minimax-m2.7` | 200K | 192K | ❌ |
-| `minimax-m2.5` | 200K | 200K | ❌ |
-| `qwen3.7-max` | 1M | 131.1K | ❌ |
+| Model ID | Context | Max Output | Vision | Responses API |
+|----------|---------|-----------|--------|--------------|
+| `deepseek-v4-pro` | 1M | 384K | ❌ | ❌ |
+| `deepseek-v4-flash` | 1M | 384K | ❌ | ❌ |
+| `deepseek-v4-flash-0731` | 1M | 384K | ❌ | ✅ |
+| `glm-5.2` | 1M | 128K | ❌ | ❌ |
+| `glm-5.1` | 200K | 128K | ❌ | ❌ |
+| `glm-5` | 1M | 128K | ❌ | ❌ |
+| `kimi-k2.7-code`¹ | 256K | 128K | ✅ | ❌ |
+| `kimi-k2.6` | 256K | 128K | ✅ | ❌ |
+| `kimi-k2.5` | 256K | 64K | ✅ | ❌ |
+| `mimo-v2.5-pro` | 256K | 256K | ❌ | ❌ |
+| `minimax-m2.7` | 200K | 192K | ❌ | ❌ |
+| `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
+| `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
+
+> All models support the OpenAI-compatible and Anthropic protocols. The **Responses API** column shows which models additionally support the Responses protocol (supports_responses=true). Responses capability is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded, so any model that gains Responses support is picked up automatically. The protocol is **disabled by default** (see `enableResponsesApi`); models use the OpenAI-compatible format unless the setting is enabled.
+> ¹ `kimi-k2.7-code` does not support temperature/top_p parameters.
+> ² `qwen3.7-max` does not support the Anthropic protocol (supports_anthropic=false).
 
 > [!TIP]
 > Automatic model discovery is enabled by default: the extension fetches the live model list from `GET /v1/models` and hides models that are not available on your account. Image-generation models (`qwen-image-2.0`, `wan2.7-image`) are excluded from the picker.
@@ -87,13 +91,17 @@ Available in `settings.json`:
 
 ```json
 {
+  "tokenrhythm.apiMode": "auto",
   "tokenrhythm.commitLanguage": "auto",
   "tokenrhythm.commitModel": "deepseek-v4-flash",
   "tokenrhythm.commitMessagePrompt": "",
   "tokenrhythm.requestTimeout": 600000,
   "tokenrhythm.recentCommitsCount": 10,
   "tokenrhythm.commitIncludeCommitDiff": false,
-  "tokenrhythm.commitAttachContextFiles": true
+  "tokenrhythm.commitAttachContextFiles": true,
+  "tokenrhythm.enableAutoModelDiscovery": true,
+  "tokenrhythm.enableThirdPartyTokenIndicator": true,
+  "tokenrhythm.enableResponsesApi": false
 }
 ```
 
@@ -108,6 +116,9 @@ Available in `settings.json`:
 | `tokenrhythm.commitAttachContextFiles` | `true` | Attach the content of AGENTS.md and README.md from the repository root as additional context for commit message generation, helping the model better understand the project. |
 | `tokenrhythm.visionProxyModel` | `kimi-k2.6` | Vision model used by the `ask_image` tool when the selected model does not support vision. |
 | `tokenrhythm.visionProxyThinking` | `false` | Enable thinking/reasoning in the vision proxy model when answering image queries. |
+| `tokenrhythm.enableAutoModelDiscovery` | `true` | Automatically fetch the live model list from `GET /v1/models` and hide models unavailable on your account. |
+| `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | Show the advanced token counter in the status bar while using TokenRhythm models. |
+| `tokenrhythm.enableResponsesApi` | `false` | Use the Responses API protocol in `auto` mode for models detected as supports_responses=true at startup (from `GET /v1/models` — dynamic, no hardcoded model IDs). **Disabled by default**: the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, non-standard multi-round tool backfill), so models fall back to the more mature OpenAI-compatible format. Enable only to try the Responses protocol. |
 | `tokenrhythm.apiMode` | `auto` | API protocol for requests: `auto` (follow each model's default; models with supports_responses=true use the Responses API automatically), `openai` (force OpenAI format), `anthropic` (force Anthropic format), or `responses` (force Responses API). Applies to both chat and Git commit generation. |
 
 > [!NOTE]
@@ -168,21 +179,25 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 扩展内置了以下 TokenRhythm Chat 模型定义（来源：[模型页](https://tokenrhythm.studio/models)）：
 
-| 模型 ID | 上下文 | 最大输出 | 视觉 |
-|---------|--------|---------|------|
-| `deepseek-v4-pro` | 1M | 384K | ❌ |
-| `deepseek-v4-flash` | 1M | 384K | ❌ |
-| `deepseek-v4-flash-0731` | 1M | 384K | ❌ |
-| `glm-5.2` | 1M | 128K | ❌ |
-| `glm-5.1` | 200K | 128K | ❌ |
-| `glm-5` | 1M | 128K | ❌ |
-| `kimi-k2.7-code` | 256K | 128K | ✅ |
-| `kimi-k2.6` | 256K | 128K | ✅ |
-| `kimi-k2.5` | 256K | 64K | ✅ |
-| `mimo-v2.5-pro` | 256K | 256K | ❌ |
-| `minimax-m2.7` | 200K | 192K | ❌ |
-| `minimax-m2.5` | 200K | 200K | ❌ |
-| `qwen3.7-max` | 1M | 131.1K | ❌ |
+| 模型 ID | 上下文 | 最大输出 | 视觉 | Responses API |
+|---------|--------|---------|------|--------------|
+| `deepseek-v4-pro` | 1M | 384K | ❌ | ❌ |
+| `deepseek-v4-flash` | 1M | 384K | ❌ | ❌ |
+| `deepseek-v4-flash-0731` | 1M | 384K | ❌ | ✅ |
+| `glm-5.2` | 1M | 128K | ❌ | ❌ |
+| `glm-5.1` | 200K | 128K | ❌ | ❌ |
+| `glm-5` | 1M | 128K | ❌ | ❌ |
+| `kimi-k2.7-code`¹ | 256K | 128K | ✅ | ❌ |
+| `kimi-k2.6` | 256K | 128K | ✅ | ❌ |
+| `kimi-k2.5` | 256K | 64K | ✅ | ❌ |
+| `mimo-v2.5-pro` | 256K | 256K | ❌ | ❌ |
+| `minimax-m2.7` | 200K | 192K | ❌ | ❌ |
+| `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
+| `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
+
+> 所有模型均支持 OpenAI 兼容与 Anthropic 协议。**Responses API** 列标注哪些模型额外支持 Responses 协议（supports_responses=true）。Responses 能力在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID，未来任何模型获得 Responses 支持都会自动生效。协议**默认关闭**（见 `enableResponsesApi`），模型默认使用 OpenAI 兼容格式，除非开启该设置。
+> ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
+> ² `qwen3.7-max` 不支持 Anthropic 协议（supports_anthropic=false）。
 
 > [!TIP]
 > 自动模型发现默认开启：扩展会从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不会出现在选择器中。
@@ -208,13 +223,17 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 ```json
 {
+  "tokenrhythm.apiMode": "auto",
   "tokenrhythm.commitLanguage": "auto",
   "tokenrhythm.commitModel": "deepseek-v4-flash",
   "tokenrhythm.commitMessagePrompt": "",
   "tokenrhythm.requestTimeout": 600000,
   "tokenrhythm.recentCommitsCount": 10,
   "tokenrhythm.commitIncludeCommitDiff": false,
-  "tokenrhythm.commitAttachContextFiles": true
+  "tokenrhythm.commitAttachContextFiles": true,
+  "tokenrhythm.enableAutoModelDiscovery": true,
+  "tokenrhythm.enableThirdPartyTokenIndicator": true,
+  "tokenrhythm.enableResponsesApi": false
 }
 ```
 
@@ -229,6 +248,9 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `tokenrhythm.commitAttachContextFiles` | `true` | 将仓库根目录的 AGENTS.md 和 README.md 作为额外上下文附加到提交消息生成中，帮助模型更好地理解项目。 |
 | `tokenrhythm.visionProxyModel` | `kimi-k2.6` | 用于 ask_image 工具的视觉模型 ID。当所选模型不支持视觉时，该模型用于回答图片相关问题。 |
 | `tokenrhythm.visionProxyThinking` | `false` | 在视觉代理模型回答图片查询时启用思考/推理功能。 |
+| `tokenrhythm.enableAutoModelDiscovery` | `true` | 自动从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。 |
+| `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | 使用 TokenRhythm 模型时在状态栏显示高级 Token 计数器。 |
+| `tokenrhythm.enableResponsesApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_responses=true 的模型（来自 `GET /v1/models`——动态探测，不硬编码模型 ID）使用 Responses 协议。**默认关闭**：TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认回退到更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。 |
 | `tokenrhythm.apiMode` | `auto` | 请求使用的 API 协议：`auto`（跟随各模型默认格式；supports_responses=true 的模型自动使用 Responses API）、`openai`（强制 OpenAI 格式）、`anthropic`（强制 Anthropic 格式）、`responses`（强制 Responses API 格式）。对聊天请求和 Git 提交消息生成均生效。 |
 
 > [!NOTE]

@@ -52,8 +52,7 @@ const BUILT_IN_MODELS: BuiltInModelDef[] = [
     // ── DeepSeek series ── 1M context / 384K max output, supports thinking (high/max)
     { baseId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216 },
     { baseId: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216 },
-    // deepseek-v4-flash-0731 additionally supports the Responses API (supports_responses=true)
-    { baseId: "deepseek-v4-flash-0731", displayName: "DeepSeek V4 Flash 0731", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216, apiMode: "responses" },
+    { baseId: "deepseek-v4-flash-0731", displayName: "DeepSeek V4 Flash 0731", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216 },
 
     // ── GLM series ── GLM-5.2: 1M context / 128K output, supports thinking (high/max)
     // GLM-5.1/GLM-5 do not support thinking, so thinkingMode="always" hides the toggle
@@ -74,9 +73,10 @@ const BUILT_IN_MODELS: BuiltInModelDef[] = [
     { baseId: "minimax-m2.5", displayName: "MiniMax M2.5", vision: false, thinkingMode: "always", contextLength: 204800, maxTokens: 204800 },
 
     // ── Qwen series ── 1M context / 131.1K max output.
-    // qwen3.7-max supports the Responses API (supports_responses=true) and does NOT
-    // support the Anthropic protocol (supports_anthropic=false).
-    { baseId: "qwen3.7-max", displayName: "Qwen3.7 Max", vision: false, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 134218, apiMode: "responses" },
+    // Note: no apiMode is hardcoded here — Responses capability is detected at
+    // startup from /v1/models (supports_responses) in provideModel.ts, so any
+    // model that gains Responses support is picked up automatically.
+    { baseId: "qwen3.7-max", displayName: "Qwen3.7 Max", vision: false, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 134218 },
 ];
 
 /**

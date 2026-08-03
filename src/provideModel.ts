@@ -17,6 +17,23 @@ const DEFAULT_MAX_TOKENS = 4096;
 const _autoDiscoveredConfigs = new Map<string, TokenRhythmModelItem>();
 
 /**
+ * Module-level set of model IDs that report supports_responses=true on /v1/models.
+ * Populated at startup (model list refresh) so provider.ts can decide the API
+ * protocol dynamically without hardcoding specific model IDs. Any model that
+ * gains Responses support in the future is picked up automatically.
+ */
+let _responsesModelIds = new Set<string>();
+
+/**
+ * Get the current set of Responses-API-capable model IDs (supports_responses=true),
+ * as detected from /v1/models at the last model list refresh.
+ * Synchronous — callers do not block; returns an empty set if not yet fetched.
+ */
+export function getResponsesModelIds(): Set<string> {
+    return _responsesModelIds;
+}
+
+/**
  * Build a LanguageModelChatInformation entry for an auto-discovered model.
  * All auto-discovered models default to thinkingMode="always" (no thinking toggle).
  */
@@ -178,6 +195,8 @@ export async function prepareLanguageModelChatInformation(
             // Step 0: Fetch Responses-API-capable model IDs (supports_responses=true)
             // These models default to the Responses protocol unless overridden.
             const responsesModelIds = await getResponsesSupportedModelIds(apiKey);
+            // Cache the set for provider.ts to query synchronously when routing requests.
+            _responsesModelIds = responsesModelIds;
             if (responsesModelIds.size > 0) {
                 logger.info("models.discovery", {
                     action: "responses_capable",

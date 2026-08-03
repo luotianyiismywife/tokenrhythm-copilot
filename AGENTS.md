@@ -29,7 +29,7 @@
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
 | **多模型支持** | 内置 13 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL） |
-| **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式（supports_responses=true 的模型自动使用 Responses 协议），`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` 字段，为支持 Responses API 的模型动态启用该协议 |
+| **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持 Responses 的模型自动生效）。**Responses 开关**：`tokenrhythm.enableResponsesApi`（**默认关闭**）控制 auto 模式下是否自动使用 Responses 协议——关闭时 `apiMode=auto` 下所有模型使用 OpenAI 兼容格式。默认关闭原因：TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式 |
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
 | **工具调用 (Tool Calling)** | 支持 VS Code 的 LanguageModelToolCallPart 机制 |
@@ -59,25 +59,24 @@
 |------|---------|------|----------------|----------|
 | GLM | `glm-5.2`, `glm-5.1`, `glm-5` | ❌ | `禁用思考` / `高` / `最大` (5.2)² / `思考`（5.1/5 不支持思考切换） | OpenAI |
 | Kimi | `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`¹ | ✅ | `思考`（不支持思考切换） | OpenAI |
-| DeepSeek | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`³ | ❌ | `禁用思考` / `高` / `极高` | OpenAI / Responses (0731) |
+| DeepSeek | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`³ | ❌ | `禁用思考` / `高` / `极高` | OpenAI / Responses⁵ |
 | MiMo | `mimo-v2.5-pro` | ❌ | `禁用思考` / `思考` | OpenAI |
 | MiniMax | `minimax-m2.7`, `minimax-m2.5` | ❌ | `思考`（不支持思考切换） | OpenAI |
-| Qwen | `qwen3.7-max`⁴ | ❌ | `禁用思考` / `思考` | Responses |
+| Qwen | `qwen3.7-max`⁴ | ❌ | `禁用思考` / `思考` | OpenAI / Responses⁵ |
 
 > ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
 > ² GLM-5.2 支持通过 reasoning_effort 设置 thinking 强度 (high/max)，GLM-5.1/GLM-5 不支持 thinking 切换。
-> ³ `deepseek-v4-flash-0731` 同时支持 OpenAI 与 Responses 协议（supports_responses=true），默认 Responses。
-> ⁴ `qwen3.7-max` 仅支持 OpenAI/Responses 协议（supports_anthropic=false），默认 Responses。
+> ³ `deepseek-v4-flash-0731` 同时支持 OpenAI 与 Responses 协议（supports_responses=true）。
+> ⁴ `qwen3.7-max` 仅支持 OpenAI/Responses 协议（supports_anthropic=false）。
+> ⁵ Responses 能力**动态探测**：启动时读取 `/v1/models` 的 `supports_responses` 标记，不硬编码模型 ID——未来任何模型获得 Responses 支持都会自动生效。协议**默认关闭**（`enableResponsesApi=false`），默认使用 OpenAI 兼容格式。
 
 > 模型清单来源于 [TokenRhythm 模型页](https://tokenrhythm.studio/models)。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不适用于 Chat，已排除。
 
 在模型选择器中，内置模型归入 `TokenRhythm` 分组（`family="TokenRhythm"`）。
 
 > 所有模型在模型选择器中均显示**一个条目**，通过**推理强度选择器**（中文标签）切换思考模式。  
-> 所有模型在模型选择器中均显示**一个条目**，通过**推理强度选择器**（中文标签）切换思考模式。  
 > - `thinkingMode="switchable"`：用户可选择`禁用思考`、`自动`或启用思考（强度可配置）  
 > - `thinkingMode="adaptive"`：仅`禁用思考`和`自动`两档选择，无强制启用思考选项  
-> - `thinkingMode="always"`：推理始终启用，选择器中不显示`禁用思考`选项（模型特性）  
 > - `thinkingMode="always"`：推理始终启用，选择器中不显示`禁用思考`选项（模型特性）  
 > 
 > **关于图像输入：** 所有模型（包括非视觉模型）的 `imageInput` 能力均声明为 `true`，以确保 VS Code 始终传递图片数据。非视觉模型通过内部的 `ask_image` 工具代理机制处理图片，不直接支持视觉输入。
@@ -169,7 +168,8 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   ├── 3. 确定 API 模式 (apiMode: "openai" | "anthropic" | "responses")
   │       ├── 读取设置 tokenrhythm.apiMode (auto/openai/anthropic/responses)
   │       ├── "openai"/"anthropic"/"responses" → 强制使用对应协议
-  │       └── "auto" → 跟随模型配置 (um.apiMode：supports_responses=true 的模型默认 responses，其余 openai)
+  │       ├── "auto" → 动态判断：模型在启动时探测到的 supports_responses 集合中且 enableResponsesApi=true → responses，否则 openai
+  │       └── "auto" + enableResponsesApi=false（默认）→ 全部使用 openai
   │
   ├── 4. 记录请求开始日志
   │
@@ -244,6 +244,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │           ├── 创建独立 AbortController 用于本轮请求
   │           │   ├── 保留 temperature/reasoning_effort 等原始参数
   │           │   ├── Anthropic 模式额外恢复 system 和 thinking 配置
+  │           │   ├── Responses 模式使用文本化回填（output_text/input_text）
   │           │   └── DeepSeek 兼容注入 reasoning_content
   │           ├── 注入工具: 本轮注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 张图时）
   │           └── 循环: 若模型再次调用 ask_image 则继续下一轮，无限追问
@@ -364,7 +365,7 @@ generateCommitMsg(secrets, scm?)
   │   ├── 用户当前输入 (SCM InputBox)
   │   └── Git Diff 内容
   ├── 调用 API:
-  │   ├── OpenaiApi.createMessage() / AnthropicApi.createMessage()
+  │   ├── OpenaiApi.createMessage() / AnthropicApi.createMessage() / ResponsesApi.createMessage()
   │   └── 流式输出到 SCM InputBox
   └── 清理: 移除 ``` 标记和 <think> 标签
 ```
@@ -489,7 +490,7 @@ src/
 计算文本或消息的 Token 数量。委托给 `countMessageTokens()`。
 
 #### `provideLanguageModelChatResponse(model, messages, options, progress, token): Promise<void>`
-核心方法：处理聊天请求，流式返回响应。包括模型配置获取（内置模型 → 自动发现回退）、API Key 验证、推理力度应用、temperature/top_p 注入（模型预设或自定义设置）、API 模式确定（`tokenrhythm.apiMode` 设置：`auto` 跟随模型默认或强制 `openai`/`anthropic`/`responses`）、延迟控制、超时管理、API 路由、流式解析、图片代理拦截处理和错误处理。错误处理区分三种情况：用户取消（直接重新抛出原始错误）、超时（友好超时提示）、连接被终止（友好终止提示）。
+核心方法：处理聊天请求，流式返回响应。包括模型配置获取（内置模型 → 自动发现回退）、API Key 验证、推理力度应用、temperature/top_p 注入（模型预设或自定义设置）、API 模式确定（`tokenrhythm.apiMode` 设置：`auto` 跟随模型默认或强制 `openai`/`anthropic`/`responses`；`tokenrhythm.enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai）、延迟控制、超时管理、API 路由、流式解析、图片代理拦截处理和错误处理。错误处理区分三种情况：用户取消（直接重新抛出原始错误）、超时（友好超时提示）、连接被终止（友好终止提示）。
 
 #### `private async _handleInterceptedToolCall(params): Promise<void>`
 处理图片代理拦截。循环处理最多 `tokenrhythm.visionMaxRounds` 轮（默认 5）。每轮检测 API 实例的 `interceptedToolCall`，发出 thinking 块显示“正在根据图片提问：[问题]”，关闭 thinking 块后视觉模型输出以普通文本流式显示。单图调用 `callVisionModel()`，多图调用 `callVisionModelMulti()`，构建本轮 API 请求（追加 assistant tool_call + tool result），注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 图时）供模型继续使用，保留 temperature/reasoning_effort 等原始参数，DeepSeek 兼容注入 `reasoning_content`。模型不再调用 ask_image/ask_with_multi_image 时退出循环。
@@ -498,6 +499,7 @@ src/
 - 每轮创建独立 AbortController，带独立超时。
 - 每轮注入 VS Code 原生工具 + ask_image + ask_with_multi_image，确保模型可以混合使用。
 - Anthropic 模式额外恢复 `system` 内容（`_systemContent`）和 `thinking` 参数。
+- Responses 模式使用文本化回填（assistant `output_text` + user `input_text`，因端点拒绝 function_call 块）。
 - 第二轮及后续轮次请求体中显式设置 `tool_choice` 为 `"auto"`（OpenAI）或 `{ type: "auto" }`（Anthropic），确保模型可继续调用工具。
 - 使用 `_resetStreamState()` 重置流状态，避免 `_completedToolCallIndices` 等状态在轮次间残留导致工具调用被跳过。
 - `thinking` 字段值统一使用字符串（`"enabled"` / `"disabled"`），与 `prepareRequestBody` 保持一致。
@@ -675,7 +677,7 @@ API 实现的抽象基类。
 从 `/v1/models` 拉取可用模型 ID 列表并返回 Set。使用内存缓存（5 分钟 TTL），API 不可用时静默降级（保留旧缓存或返回空集）。导出 `isApiFetchSuccessful()` 检查上次请求是否成功。
 
 #### `getResponsesSupportedModelIds(apiKey): Promise<Set<string>>`
-从缓存的 `/v1/models` 元数据中筛选 `supports_responses=true` 的模型 ID 集。供自动模型发现为这些模型标记 Responses 协议支持。
+从缓存的 `/v1/models` 元数据中筛选 `supports_responses=true` 的模型 ID 集。供 `provideModel.ts` 在启动时缓存为动态标记（`getResponsesModelIds()`），由 provider 在 auto 模式下查询决定是否使用 Responses 协议。
 
 #### `isApiFetchSuccessful(): boolean`
 返回最近一次 API 模型列表拉取是否成功。用于模型提供者决定是否应用 API 过滤。
@@ -698,7 +700,10 @@ API 实现的抽象基类。
 ### 4.10 `src/provideModel.ts`
 
 #### `prepareLanguageModelChatInformation(options, _token, _secrets): Promise<LanguageModelChatInformation[]>`
-获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` 标记，为支持 Responses API 的模型（内置或自动发现）设置 `apiMode="responses"`。API 不可用时静默回退到全量内置列表。
+获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` 标记，缓存到模块级 `_responsesModelIds` 供 `getResponsesModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得 Responses 支持自动生效）。API 不可用时静默回退到全量内置列表。
+
+#### `getResponsesModelIds(): Set<string>`
+同步返回当前探测到的 supports_responses=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Responses 协议。
 
 #### `getAutoDiscoveredModelConfig(modelId): TokenRhythmModelItem | undefined`
 返回之前自动发现的模型配置。由 `provider.ts` 在 `getBuiltInModelConfig()` 返回 undefined 时作为回退调用。
@@ -1110,7 +1115,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 确保 API Key 存在。
 
 #### `performCommitMsgGeneration(secrets, gitDiff, inputBox, repoPath?): Promise<void>`
-核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。
+核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。
 
 #### `abortCommitGeneration(): void`
 中止提交消息生成。

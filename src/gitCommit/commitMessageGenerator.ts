@@ -6,6 +6,7 @@ import { OpenaiApi } from "../openai/openaiApi";
 import { AnthropicApi } from "../anthropic/anthropicApi";
 import { ResponsesApi } from "../responses/responsesApi";
 import { getBuiltInModelConfig } from "../models";
+import { getResponsesSupportedModelIds } from "../apiModelList";
 import { logger } from "../logger";
 import { l10n } from "../localize";
 import type { TokenRhythmModelItem } from "../types";
@@ -252,12 +253,22 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
 
         const messages = [{ role: "user", content: prompt }];
 
-        // Use the appropriate API based on model config, overridable by user setting
-        const commitModelConfig = getBuiltInModelConfig(commitModelId);
+        // Use the appropriate API based on model config, overridable by user setting.
+        // In auto mode, Responses capability is detected dynamically from /v1/models
+        // (supports_responses) — no model IDs are hardcoded.
+        // tokenrhythm.enableResponsesApi (default false) gates the auto-use of the
+        // Responses protocol; when disabled, auto mode always uses the OpenAI format.
         const apiModeSetting = config.get<string>("tokenrhythm.apiMode", "auto");
-        const apiMode = (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses")
-            ? apiModeSetting
-            : (commitModelConfig?.apiMode || "openai");
+        const enableResponsesApi = config.get<boolean>("tokenrhythm.enableResponsesApi", false);
+        let apiMode: string;
+        if (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses") {
+            apiMode = apiModeSetting;
+        } else {
+            // auto: use Responses only if the model was detected as supports_responses=true
+            // AND the user has enabled the Responses protocol.
+            const responsesModelIds = await getResponsesSupportedModelIds(apiKey);
+            apiMode = (enableResponsesApi && responsesModelIds.has(commitModelId)) ? "responses" : "openai";
+        }
         // Reflect the effective apiMode on the model so createMessage() builds
         // the correct headers (x-api-key for anthropic, Bearer for openai/responses).
         selectedModel.apiMode = apiMode;

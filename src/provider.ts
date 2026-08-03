@@ -16,7 +16,7 @@ import type { ModelPreset, TokenRhythmModelItem } from "./types";
 
 import { createRetryConfig, executeWithRetry, convertToolsToOpenAI } from "./utils";
 
-import { prepareLanguageModelChatInformation, getAutoDiscoveredModelConfig } from "./provideModel";
+import { prepareLanguageModelChatInformation, getAutoDiscoveredModelConfig, getResponsesModelIds } from "./provideModel";
 import { getBuiltInModelConfig } from "./models";
 import { l10nFormat } from "./localize";
 import { countMessageTokens, textTokenLength } from "./provideToken";
@@ -230,10 +230,21 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
 
             // Determine API mode: user setting overrides model config (default: openai)
             // tokenrhythm.apiMode = "auto" follows each model's default; "openai"/"anthropic"/"responses" force the protocol.
+            // In auto mode, Responses capability is detected dynamically from /v1/models
+            // (supports_responses) at startup — no model IDs are hardcoded, so any model
+            // that gains Responses support is picked up automatically.
+            // tokenrhythm.enableResponsesApi (default false) gates the auto-use of the
+            // Responses protocol; when disabled, auto mode always uses the OpenAI format.
             const apiModeSetting = config.get<string>("tokenrhythm.apiMode", "auto");
-            const apiMode = (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses")
-                ? apiModeSetting
-                : (um?.apiMode || "openai");
+            const enableResponsesApi = config.get<boolean>("tokenrhythm.enableResponsesApi", false);
+            let apiMode: string;
+            if (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses") {
+                apiMode = apiModeSetting;
+            } else {
+                // auto: use Responses only if the model was detected as supports_responses=true
+                // AND the user has enabled the Responses protocol.
+                apiMode = (enableResponsesApi && getResponsesModelIds().has(model.id)) ? "responses" : "openai";
+            }
             const baseUrl = um?.baseUrl || "https://tokenrhythm.studio/v1/";
 
             logger.info("request.start", {

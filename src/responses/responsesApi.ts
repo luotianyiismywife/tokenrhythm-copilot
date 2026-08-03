@@ -424,6 +424,15 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
                 }
                 break;
             }
+            // Some models (e.g. deepseek-v4-flash-0731) emit reasoning_text.delta
+            // instead of reasoning_summary_text.delta — treat both as thinking content.
+            case "response.reasoning_text.delta": {
+                if (event.delta) {
+                    this._capturedReasoningContent += event.delta;
+                    this.bufferThinkingContent(event.delta, progress);
+                }
+                break;
+            }
             case "response.output_text.delta": {
                 if (event.delta) {
                     this.reportEndThinking(progress);
