@@ -24,6 +24,8 @@ Integrate [TokenRhythm](https://tokenrhythm.studio) models into GitHub Copilot C
 
 Once installed, the status bar shows the current context usage and cumulative input/output token counts for TokenRhythm models. DeepSeek models and models that return cache metrics via the OpenAI-compatible format also display the **cumulative cache hit count** and **cache hit rate** in the tooltip.
 
+The status bar only appears while you are actually using a TokenRhythm model: it stays hidden on startup and when other chat model providers are in use, and auto-hides after 60 seconds of inactivity.
+
 You can control this indicator via the `tokenrhythm.enableThirdPartyTokenIndicator` setting (default: `true`). When disabled, only the native Copilot token indicator remains visible.
 
 > [!NOTE]
@@ -142,6 +144,8 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 ### 高级 Token 用量指示器
 
 安装后，使用 TokenRhythm 提供的模型时，状态栏会显示当前上下文用量与累计输入/输出 Token 量。DeepSeek 和通过 OpenAI 格式返回缓存用量的模型还会显示**累计缓存命中量**与**缓存命中率**。
+
+状态栏**仅在您实际使用 TokenRhythm 模型时显示**：启动时隐藏、使用其他模型提供商的模型时不显示，停止使用（空闲 60 秒）后自动隐藏。
 
 可通过 `tokenrhythm.enableThirdPartyTokenIndicator` 设置（默认 `true`）控制此高级 Token 指示器。关闭后仅显示 Copilot 原生 Token 指示器。
 

@@ -20,7 +20,7 @@ import { prepareLanguageModelChatInformation, getAutoDiscoveredModelConfig } fro
 import { getBuiltInModelConfig } from "./models";
 import { l10nFormat } from "./localize";
 import { countMessageTokens, textTokenLength } from "./provideToken";
-import { updateContextStatusBar, recordUsage, updateCumulativeTooltip, updateStatusBarWithApiPrompt } from "./statusBar";
+import { updateContextStatusBar, recordUsage, updateCumulativeTooltip, updateStatusBarWithApiPrompt, showTokenStatusBar, scheduleStatusBarHide } from "./statusBar";
 import { OpenaiApi } from "./openai/openaiApi";
 import { AnthropicApi } from "./anthropic/anthropicApi";
 import { ResponsesApi } from "./responses/responsesApi";
@@ -253,6 +253,10 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             const enableThirdPartyIndicator = config.get<boolean>("tokenrhythm.enableThirdPartyTokenIndicator", true);
 
             // Calculate client-side token estimate for fallback (also updates Advanced Token indicator if enabled)
+            // Show the status bar — this request is using one of this extension's models.
+            // (It stays hidden on startup and while other chat model providers are in use.)
+            showTokenStatusBar(this.statusBarItem);
+
             const estimatedInputTokens = await updateContextStatusBar(messages, options.tools, model, this.statusBarItem, modelConfig);
 
             // Apply delay between consecutive requests
@@ -611,6 +615,10 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             const durationMs = Date.now() - requestStartTime;
             logger.info("request.end", { modelId: model.id, durationMs });
             this._lastRequestTime = Date.now();
+
+            // Auto-hide the status bar after inactivity — it only reflects TokenRhythm
+            // model usage, so hide it once the user stops using these models.
+            scheduleStatusBarHide(this.statusBarItem);
         }
     }
 

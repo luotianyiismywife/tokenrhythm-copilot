@@ -10,6 +10,11 @@ let cumulativeOutputTokens = 0;
 let cumulativeCacheHitTokens = 0;
 let cumulativeCacheMissTokens = 0;
 
+/** How long the status bar stays visible after the last TokenRhythm model request. */
+const STATUS_BAR_HIDE_DELAY_MS = 60 * 1000; // 1 minute of inactivity
+/** Module-level timer for auto-hiding the status bar when TokenRhythm models are no longer in use. */
+let statusBarHideTimer: NodeJS.Timeout | null = null;
+
 export function initStatusBar(context: vscode.ExtensionContext): vscode.StatusBarItem {
     // Reset cumulative counters on VS Code startup
     resetCumulativeCounters();
@@ -19,8 +24,37 @@ export function initStatusBar(context: vscode.ExtensionContext): vscode.StatusBa
     tokenCountStatusBarItem.text = `$(symbol-numeric) ${l10n("Ready")}`;
     tokenCountStatusBarItem.tooltip = l10n("Current model token usage");
     context.subscriptions.push(tokenCountStatusBarItem);
-    tokenCountStatusBarItem.show();
+    // Do NOT show on startup — only show while one of this extension's models is actually in use.
+    tokenCountStatusBarItem.hide();
     return tokenCountStatusBarItem;
+}
+
+/**
+ * Show the status bar and cancel any pending auto-hide.
+ * Called when a chat request starts using one of this extension's models.
+ */
+export function showTokenStatusBar(statusBarItem: vscode.StatusBarItem): void {
+    if (statusBarHideTimer) {
+        clearTimeout(statusBarHideTimer);
+        statusBarHideTimer = null;
+    }
+    statusBarItem.show();
+}
+
+/**
+ * Schedule hiding the status bar after a period of inactivity.
+ * Called when a chat request finishes; the bar stays visible while the user
+ * keeps using TokenRhythm models and auto-hides once they stop (e.g. switched
+ * to another model provider).
+ */
+export function scheduleStatusBarHide(statusBarItem: vscode.StatusBarItem, delayMs: number = STATUS_BAR_HIDE_DELAY_MS): void {
+    if (statusBarHideTimer) {
+        clearTimeout(statusBarHideTimer);
+    }
+    statusBarHideTimer = setTimeout(() => {
+        statusBarHideTimer = null;
+        statusBarItem.hide();
+    }, delayMs);
 }
 
 /**

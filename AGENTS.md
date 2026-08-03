@@ -37,7 +37,7 @@
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
-| **高级 Token 指示器** | 可通过 `tokenrhythm.enableThirdPartyTokenIndicator` 配置（默认开启）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器 |
+| **高级 Token 指示器** | 可通过 `tokenrhythm.enableThirdPartyTokenIndicator` 配置（默认开启）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器。状态栏**仅在用户实际使用本插件提供的模型时显示**：启动时隐藏，发起 tokenrhythm 模型请求时显示，停止使用（空闲 60 秒）后自动隐藏，避免使用其他模型时残留上下文信息 |
 | **Git 提交消息生成** | 一键生成 Conventional Commit 格式的 Git 提交消息，支持 `auto` 语言模式自动从历史提交检测语言 |
 | **多仓库支持** | 支持多根工作区 (multi-root) 中多个 Git 仓库的提交消息生成 |
 | **模型预设** | 支持通过命令面板快速切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
@@ -817,7 +817,13 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 ### 4.9 `src/statusBar.ts`
 
 #### `initStatusBar(context): vscode.StatusBarItem`
-创建状态栏条目，重置累计计数器，显示 "Ready"。
+创建状态栏条目并重置累计计数器。**启动时不显示**（保持隐藏），仅在用户实际使用本插件模型时才显示。
+
+#### `showTokenStatusBar(statusBarItem): void`
+显示状态栏并取消待执行的自动隐藏定时器。在 `provideLanguageModelChatResponse` 发起请求时调用。
+
+#### `scheduleStatusBarHide(statusBarItem, delayMs?): void`
+调度状态栏自动隐藏（默认空闲 60 秒后隐藏，可被下一次请求取消）。在请求结束（finally）时调用，确保切换其他模型后状态栏不会残留。
 
 #### `formatTokenCount(value): string`
 格式化 Token 数为人类可读格式 (K/M/B)。
