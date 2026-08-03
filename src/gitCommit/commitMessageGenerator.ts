@@ -6,7 +6,7 @@ import { OpenaiApi } from "../openai/openaiApi";
 import { AnthropicApi } from "../anthropic/anthropicApi";
 import { ResponsesApi } from "../responses/responsesApi";
 import { getBuiltInModelConfig } from "../models";
-import { getResponsesSupportedModelIds } from "../apiModelList";
+import { getResponsesSupportedModelIds, getAnthropicSupportedModelIds } from "../apiModelList";
 import { logger } from "../logger";
 import { l10n } from "../localize";
 import type { TokenRhythmModelItem } from "../types";
@@ -254,20 +254,28 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         const messages = [{ role: "user", content: prompt }];
 
         // Use the appropriate API based on model config, overridable by user setting.
-        // In auto mode, Responses capability is detected dynamically from /v1/models
-        // (supports_responses) — no model IDs are hardcoded.
-        // tokenrhythm.enableResponsesApi (default false) gates the auto-use of the
-        // Responses protocol; when disabled, auto mode always uses the OpenAI format.
+        // In auto mode, protocol capability is detected dynamically from /v1/models
+        // (supports_responses / supports_anthropic) — no model IDs are hardcoded.
+        // Priority in auto mode:
+        //   1. enableResponsesApi (default false) + model supports_responses=true → responses
+        //   2. enableAnthropicApi (default false) + model supports_anthropic=true → anthropic
+        //   3. otherwise → openai
         const apiModeSetting = config.get<string>("tokenrhythm.apiMode", "auto");
         const enableResponsesApi = config.get<boolean>("tokenrhythm.enableResponsesApi", false);
+        const enableAnthropicApi = config.get<boolean>("tokenrhythm.enableAnthropicApi", false);
         let apiMode: string;
         if (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses") {
             apiMode = apiModeSetting;
         } else {
-            // auto: use Responses only if the model was detected as supports_responses=true
-            // AND the user has enabled the Responses protocol.
             const responsesModelIds = await getResponsesSupportedModelIds(apiKey);
-            apiMode = (enableResponsesApi && responsesModelIds.has(commitModelId)) ? "responses" : "openai";
+            const anthropicModelIds = await getAnthropicSupportedModelIds(apiKey);
+            if (enableResponsesApi && responsesModelIds.has(commitModelId)) {
+                apiMode = "responses";
+            } else if (enableAnthropicApi && anthropicModelIds.has(commitModelId)) {
+                apiMode = "anthropic";
+            } else {
+                apiMode = "openai";
+            }
         }
         // Reflect the effective apiMode on the model so createMessage() builds
         // the correct headers (x-api-key for anthropic, Bearer for openai/responses).

@@ -86,6 +86,18 @@ export async function getResponsesSupportedModelIds(apiKey: string | undefined):
 }
 
 /**
+ * Get the set of model IDs whose /v1/models entry reports supports_anthropic=true.
+ * These models can use the Anthropic Messages API protocol (POST /v1/messages).
+ *
+ * @param apiKey - The API key for authentication.
+ * @returns A set of model IDs supporting the Anthropic protocol.
+ */
+export async function getAnthropicSupportedModelIds(apiKey: string | undefined): Promise<Set<string>> {
+    await ensureApiModelCache(apiKey);
+    return new Set((cachedModelMetadata ?? []).filter((m) => m.supports_anthropic === true).map((m) => m.id));
+}
+
+/**
  * Ensure the module-level model cache is populated (5-minute TTL, silent fallback).
  */
 async function ensureApiModelCache(apiKey: string | undefined): Promise<void> {

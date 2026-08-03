@@ -16,7 +16,7 @@ import type { ModelPreset, TokenRhythmModelItem } from "./types";
 
 import { createRetryConfig, executeWithRetry, convertToolsToOpenAI } from "./utils";
 
-import { prepareLanguageModelChatInformation, getAutoDiscoveredModelConfig, getResponsesModelIds } from "./provideModel";
+import { prepareLanguageModelChatInformation, getAutoDiscoveredModelConfig, getResponsesModelIds, getAnthropicModelIds } from "./provideModel";
 import { getBuiltInModelConfig } from "./models";
 import { l10nFormat } from "./localize";
 import { countMessageTokens, textTokenLength } from "./provideToken";
@@ -230,20 +230,25 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
 
             // Determine API mode: user setting overrides model config (default: openai)
             // tokenrhythm.apiMode = "auto" follows each model's default; "openai"/"anthropic"/"responses" force the protocol.
-            // In auto mode, Responses capability is detected dynamically from /v1/models
-            // (supports_responses) at startup — no model IDs are hardcoded, so any model
-            // that gains Responses support is picked up automatically.
-            // tokenrhythm.enableResponsesApi (default false) gates the auto-use of the
-            // Responses protocol; when disabled, auto mode always uses the OpenAI format.
+            // In auto mode, protocol capability is detected dynamically from /v1/models
+            // (supports_responses / supports_anthropic) at startup — no model IDs are
+            // hardcoded, so any model that gains a capability is picked up automatically.
+            // Priority in auto mode:
+            //   1. enableResponsesApi (default false) + model supports_responses=true → responses
+            //   2. enableAnthropicApi (default false) + model supports_anthropic=true → anthropic
+            //   3. otherwise → openai
             const apiModeSetting = config.get<string>("tokenrhythm.apiMode", "auto");
             const enableResponsesApi = config.get<boolean>("tokenrhythm.enableResponsesApi", false);
+            const enableAnthropicApi = config.get<boolean>("tokenrhythm.enableAnthropicApi", false);
             let apiMode: string;
             if (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses") {
                 apiMode = apiModeSetting;
+            } else if (enableResponsesApi && getResponsesModelIds().has(model.id)) {
+                apiMode = "responses";
+            } else if (enableAnthropicApi && getAnthropicModelIds().has(model.id)) {
+                apiMode = "anthropic";
             } else {
-                // auto: use Responses only if the model was detected as supports_responses=true
-                // AND the user has enabled the Responses protocol.
-                apiMode = (enableResponsesApi && getResponsesModelIds().has(model.id)) ? "responses" : "openai";
+                apiMode = "openai";
             }
             const baseUrl = um?.baseUrl || "https://tokenrhythm.studio/v1/";
 

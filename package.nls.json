@@ -52,6 +52,7 @@
 	"config.apiMode.enum.anthropic.desc": "Anthropic — use the Anthropic format (POST /v1/messages).",
 	"config.apiMode.enum.responses.desc": "Responses — use the OpenAI Responses API format (POST /v1/responses). Only models with supports_responses=true support this protocol.",
 	"config.enableResponsesApi.desc": "Use the Responses API protocol for models that support it (supports_responses=true, e.g. qwen3.7-max, deepseek-v4-flash-0731) when apiMode is set to auto. **Disabled by default** — the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, and non-standard multi-round tool backfill), so models default to the OpenAI-compatible format which is more mature. Enable this only if you want to try the Responses protocol.",
+	"config.enableAnthropicApi.desc": "Use the Anthropic Messages protocol in auto mode for models detected as supports_anthropic=true at startup (from /v1/models — dynamic, no hardcoded model IDs). **Disabled by default**; models use the OpenAI-compatible format unless enabled. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI.",
 
 	"command.setModelPreset": "Set Model Temperature Preset",
 

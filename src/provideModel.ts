@@ -3,7 +3,7 @@ import { CancellationToken, LanguageModelChatInformation, LanguageModelChatCapab
 
 import { logger } from "./logger";
 import { getBuiltInModelInfos } from "./models";
-import { getApiModelIds, getResponsesSupportedModelIds, isApiFetchSuccessful } from "./apiModelList";
+import { getApiModelIds, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful } from "./apiModelList";
 import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
 import type { TokenRhythmModelItem } from "./types";
 import { l10n } from "./localize";
@@ -31,6 +31,22 @@ let _responsesModelIds = new Set<string>();
  */
 export function getResponsesModelIds(): Set<string> {
     return _responsesModelIds;
+}
+
+/**
+ * Module-level set of model IDs that report supports_anthropic=true on /v1/models.
+ * Populated at startup (model list refresh) so provider.ts can decide the API
+ * protocol dynamically without hardcoding specific model IDs.
+ */
+let _anthropicModelIds = new Set<string>();
+
+/**
+ * Get the current set of Anthropic-protocol-capable model IDs (supports_anthropic=true),
+ * as detected from /v1/models at the last model list refresh.
+ * Synchronous — callers do not block; returns an empty set if not yet fetched.
+ */
+export function getAnthropicModelIds(): Set<string> {
+    return _anthropicModelIds;
 }
 
 /**
@@ -201,6 +217,17 @@ export async function prepareLanguageModelChatInformation(
                 logger.info("models.discovery", {
                     action: "responses_capable",
                     models: [...responsesModelIds],
+                });
+            }
+
+            // Step 0b: Fetch Anthropic-protocol-capable model IDs (supports_anthropic=true)
+            // Cached for provider.ts to query synchronously when routing requests in auto mode.
+            const anthropicModelIds = await getAnthropicSupportedModelIds(apiKey);
+            _anthropicModelIds = anthropicModelIds;
+            if (anthropicModelIds.size > 0) {
+                logger.info("models.discovery", {
+                    action: "anthropic_capable",
+                    models: [...anthropicModelIds],
                 });
             }
 

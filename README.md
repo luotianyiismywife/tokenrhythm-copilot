@@ -78,7 +78,7 @@ The extension ships with built-in definitions for the following TokenRhythm chat
 | `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
 | `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
 
-> All models support the OpenAI-compatible and Anthropic protocols. The **Responses API** column shows which models additionally support the Responses protocol (supports_responses=true). Responses capability is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded, so any model that gains Responses support is picked up automatically. The protocol is **disabled by default** (see `enableResponsesApi`); models use the OpenAI-compatible format unless the setting is enabled.
+> All models support the OpenAI-compatible protocol. The **Responses API** column shows which models additionally support the Responses protocol (supports_responses=true); most models also support Anthropic (supports_anthropic=true). Protocol capability is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded. In `auto` mode, priority: Responses (if `enableResponsesApi` enabled) > Anthropic (if `enableAnthropicApi` enabled) > OpenAI.
 > ¹ `kimi-k2.7-code` does not support temperature/top_p parameters.
 > ² `qwen3.7-max` does not support the Anthropic protocol (supports_anthropic=false).
 
@@ -101,7 +101,8 @@ Available in `settings.json`:
   "tokenrhythm.commitAttachContextFiles": true,
   "tokenrhythm.enableAutoModelDiscovery": true,
   "tokenrhythm.enableThirdPartyTokenIndicator": true,
-  "tokenrhythm.enableResponsesApi": false
+  "tokenrhythm.enableResponsesApi": false,
+  "tokenrhythm.enableAnthropicApi": false
 }
 ```
 
@@ -119,6 +120,7 @@ Available in `settings.json`:
 | `tokenrhythm.enableAutoModelDiscovery` | `true` | Automatically fetch the live model list from `GET /v1/models` and hide models unavailable on your account. |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | Show the advanced token counter in the status bar while using TokenRhythm models. |
 | `tokenrhythm.enableResponsesApi` | `false` | Use the Responses API protocol in `auto` mode for models detected as supports_responses=true at startup (from `GET /v1/models` — dynamic, no hardcoded model IDs). **Disabled by default**: the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, non-standard multi-round tool backfill), so models fall back to the more mature OpenAI-compatible format. Enable only to try the Responses protocol. |
+| `tokenrhythm.enableAnthropicApi` | `false` | Use the Anthropic Messages protocol in `auto` mode for models detected as supports_anthropic=true at startup (dynamic, no hardcoded model IDs). **Disabled by default**. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI. |
 | `tokenrhythm.apiMode` | `auto` | API protocol for requests: `auto` (follow each model's default; models with supports_responses=true use the Responses API automatically), `openai` (force OpenAI format), `anthropic` (force Anthropic format), or `responses` (force Responses API). Applies to both chat and Git commit generation. |
 
 > [!NOTE]
@@ -195,7 +197,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
 | `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
 
-> 所有模型均支持 OpenAI 兼容与 Anthropic 协议。**Responses API** 列标注哪些模型额外支持 Responses 协议（supports_responses=true）。Responses 能力在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID，未来任何模型获得 Responses 支持都会自动生效。协议**默认关闭**（见 `enableResponsesApi`），模型默认使用 OpenAI 兼容格式，除非开启该设置。
+> 所有模型均支持 OpenAI 兼容协议。**Responses API** 列标注哪些模型额外支持 Responses 协议（supports_responses=true）；大多数模型也支持 Anthropic（supports_anthropic=true）。协议能力在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID。auto 模式下优先级：Responses（若开启 `enableResponsesApi`）> Anthropic（若开启 `enableAnthropicApi`）> OpenAI。
 > ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
 > ² `qwen3.7-max` 不支持 Anthropic 协议（supports_anthropic=false）。
 
@@ -233,7 +235,8 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
   "tokenrhythm.commitAttachContextFiles": true,
   "tokenrhythm.enableAutoModelDiscovery": true,
   "tokenrhythm.enableThirdPartyTokenIndicator": true,
-  "tokenrhythm.enableResponsesApi": false
+  "tokenrhythm.enableResponsesApi": false,
+  "tokenrhythm.enableAnthropicApi": false
 }
 ```
 
@@ -251,6 +254,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `tokenrhythm.enableAutoModelDiscovery` | `true` | 自动从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。 |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | 使用 TokenRhythm 模型时在状态栏显示高级 Token 计数器。 |
 | `tokenrhythm.enableResponsesApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_responses=true 的模型（来自 `GET /v1/models`——动态探测，不硬编码模型 ID）使用 Responses 协议。**默认关闭**：TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认回退到更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。 |
+| `tokenrhythm.enableAnthropicApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_anthropic=true 的模型（动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭**。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。 |
 | `tokenrhythm.apiMode` | `auto` | 请求使用的 API 协议：`auto`（跟随各模型默认格式；supports_responses=true 的模型自动使用 Responses API）、`openai`（强制 OpenAI 格式）、`anthropic`（强制 Anthropic 格式）、`responses`（强制 Responses API 格式）。对聊天请求和 Git 提交消息生成均生效。 |
 
 > [!NOTE]

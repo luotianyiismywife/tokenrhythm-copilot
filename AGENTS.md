@@ -29,7 +29,7 @@
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
 | **多模型支持** | 内置 13 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL） |
-| **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持 Responses 的模型自动生效）。**Responses 开关**：`tokenrhythm.enableResponsesApi`（**默认关闭**）控制 auto 模式下是否自动使用 Responses 协议——关闭时 `apiMode=auto` 下所有模型使用 OpenAI 兼容格式。默认关闭原因：TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式 |
+| **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持协议的模型自动生效）。**auto 模式优先级**：`enableResponsesApi`（默认关闭）→ `enableAnthropicApi`（默认关闭）→ 兜底 OpenAI。默认关闭原因：TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式 |
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
 | **工具调用 (Tool Calling)** | 支持 VS Code 的 LanguageModelToolCallPart 机制 |
@@ -168,8 +168,11 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   ├── 3. 确定 API 模式 (apiMode: "openai" | "anthropic" | "responses")
   │       ├── 读取设置 tokenrhythm.apiMode (auto/openai/anthropic/responses)
   │       ├── "openai"/"anthropic"/"responses" → 强制使用对应协议
-  │       ├── "auto" → 动态判断：模型在启动时探测到的 supports_responses 集合中且 enableResponsesApi=true → responses，否则 openai
-  │       └── "auto" + enableResponsesApi=false（默认）→ 全部使用 openai
+  │       ├── "auto" → 优先级探测：
+  │       │   ├── enableResponsesApi=true 且模型 ∈ supports_responses 集合 → responses
+  │       │   ├── enableAnthropicApi=true 且模型 ∈ supports_anthropic 集合 → anthropic
+  │       │   └── 否则 → openai
+  │       └── 默认（两开关均关闭）→ 全部使用 openai
   │
   ├── 4. 记录请求开始日志
   │
@@ -679,6 +682,9 @@ API 实现的抽象基类。
 #### `getResponsesSupportedModelIds(apiKey): Promise<Set<string>>`
 从缓存的 `/v1/models` 元数据中筛选 `supports_responses=true` 的模型 ID 集。供 `provideModel.ts` 在启动时缓存为动态标记（`getResponsesModelIds()`），由 provider 在 auto 模式下查询决定是否使用 Responses 协议。
 
+#### `getAnthropicSupportedModelIds(apiKey): Promise<Set<string>>`
+从缓存的 `/v1/models` 元数据中筛选 `supports_anthropic=true` 的模型 ID 集。供 `provideModel.ts` 在启动时缓存为动态标记（`getAnthropicModelIds()`），由 provider 在 auto 模式下查询决定是否使用 Anthropic 协议。
+
 #### `isApiFetchSuccessful(): boolean`
 返回最近一次 API 模型列表拉取是否成功。用于模型提供者决定是否应用 API 过滤。
 
@@ -700,10 +706,13 @@ API 实现的抽象基类。
 ### 4.10 `src/provideModel.ts`
 
 #### `prepareLanguageModelChatInformation(options, _token, _secrets): Promise<LanguageModelChatInformation[]>`
-获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` 标记，缓存到模块级 `_responsesModelIds` 供 `getResponsesModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得 Responses 支持自动生效）。API 不可用时静默回退到全量内置列表。
+获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。API 不可用时静默回退到全量内置列表。
 
 #### `getResponsesModelIds(): Set<string>`
 同步返回当前探测到的 supports_responses=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Responses 协议。
+
+#### `getAnthropicModelIds(): Set<string>`
+同步返回当前探测到的 supports_anthropic=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Anthropic 协议。
 
 #### `getAutoDiscoveredModelConfig(modelId): TokenRhythmModelItem | undefined`
 返回之前自动发现的模型配置。由 `provider.ts` 在 `getBuiltInModelConfig()` 返回 undefined 时作为回退调用。
