@@ -225,14 +225,14 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │
   │     └── Responses 模式 (POST /v1/responses):
   │         ├── ResponsesApi.convertMessages()   ← 消息格式转换（input 数组，仅 input_text/output_text/input_image）
-  │         ├── ResponsesApi.prepareRequestBody() ← 构建请求体（instructions/reasoning/tools）
+  │         ├── ResponsesApi.prepareRequestBody() ← 构建请求体（instructions/reasoning/tools，工具用扁平格式）
   │         ├── POST /v1/responses               ← 发送请求
   │         ├── executeWithRetry()               ← 可重试
   │         └── ResponsesApi.processStreamingResponse()
   │             ├── SSE 行解析 ("data: ...")
   │             └── processResponsesEvent()
   │                 ├── response.output_item.added → function_call 缓冲（按 output_index）
-  │                 ├── response.reasoning_summary_text.delta → 推理内容
+  │                 ├── response.reasoning_summary_text.delta / reasoning_text.delta → 推理内容（因模型而异）
   │                 ├── response.output_text.delta → 文本
   │                 ├── response.function_call_arguments.delta/done → 工具参数
   │                 └── response.completed → usage 统计
@@ -343,7 +343,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
 - **图片数据生命周期**: 图片存于 API 实例的 `_localImages` 数组，请求结束后随实例 GC 自动回收
 - **OpenAI 模式**: 使用 `tool_calls` + `tool` role 消息格式构建每轮
 - **Anthropic 模式**: 使用 `tool_use` + `tool_result` content block 格式构建每轮
-- **Responses 模式**: 使用文本化回填（assistant `output_text` `[tool_call] name(args) [/tool_call]` + user `input_text` `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）
+- **Responses 模式**: 使用文本化回填（assistant `output_text` `[tool_call] name(args) [/tool_call]` + user `input_text` `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）。**工具定义需扁平格式**：Responses 端点要求 `{ type: "function", name, description, parameters }`（OpenAI 端点的嵌套 `function` 格式会被拒绝，报 `InvalidParameter: ...valid openai-compatible JSON schema`）——`ResponsesApi.prepareRequestBody` 已按扁平格式注入，且工具定义来自 VS Code 转换后的扁平结构
 - **参数保留**: 每轮保留 temperature、top_p、thinking 模式等原始参数
 - **DeepSeek 兼容**: 对 DeepSeek 模型的 assistant tool_call 消息注入 reasoning_content 字段
 
@@ -421,6 +421,10 @@ src/
         ├── show-models.nls.zh-cn.md      # 步骤 2 中文版
         ├── advanced-settings.md          # 步骤 3：高级设置
         └── advanced-settings.nls.zh-cn.md# 步骤 3 中文版
+
+test/
+├── api-tests.mjs                        # 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses）
+└── README.md                            # 测试说明与平台差异记录（含 Responses 扁平化问题）
 ```
 
 ### 3.2 文件详细说明
@@ -1071,7 +1075,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 将 VS Code 消息转换为 Responses input 格式。系统消息提取到 `_systemContent`（用于 `instructions` 字段）。支持文本、图片（`input_image`）、历史工具调用/结果（**文本化回填**：assistant `[tool_call] name(args) [/tool_call]` + user `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。
 
 #### `prepareRequestBody(rb, um?, options?): Record<string, unknown>`
-构建 Responses 请求体。设置 instructions（system）、temperature、top_p、max_output_tokens、reasoning（启用→`{ effort }`，禁用→`{ effort: "none" }`，adaptive→省略）、tools（Responses function 格式）、tool_choice（仅 `auto`/`none`，TokenRhythm 拒绝 object/required 形式）。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。
+构建 Responses 请求体。设置 instructions（system）、temperature、top_p、max_output_tokens、reasoning（启用→`{ effort }`，禁用→`{ effort: "none" }`，adaptive→省略）、tools（Responses function 格式）、tool_choice（仅 `auto`/`none`，TokenRhythm 拒绝 object/required 形式）。**工具定义必须使用扁平格式** `{ type: "function", name, description, parameters }`（OpenAI 嵌套 `function` 格式被端点拒绝）。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。
 
 #### `processStreamingResponse(responseBody, progress, token): Promise<void>`
 处理 Responses SSE 流式响应。逐行解析 `data:` 前缀的 SSE 事件，委托 `processResponsesEvent()`。注册取消回调：`token.onCancellationRequested` 时调用 `reader.cancel()` 立即中断流式读取。在 `finally` 块中 dispose 该回调。
