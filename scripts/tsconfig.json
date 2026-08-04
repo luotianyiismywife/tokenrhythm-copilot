@@ -4,11 +4,11 @@
 		"target": "ES2024",
 		"lib": ["ES2024", "dom"],
 		"sourceMap": true,
-		"rootDir": "src",
+		"rootDir": ".",
 		"strict": true,
 		"outDir": "out",
 		"skipLibCheck": true,
 		"types": ["node"]
 	},
-	"exclude": ["scripts", "node_modules", "out"]
+	"include": ["cookieApi/**/*.ts"]
 }

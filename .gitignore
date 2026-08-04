@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 out/
+scripts/out/
 
 # VSIX package
 extension.vsix
@@ -18,3 +19,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# User data exports (personal account call logs)
+call-logs-export.csv

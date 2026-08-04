@@ -422,6 +422,17 @@ src/
         ├── advanced-settings.md          # 步骤 3：高级设置
         └── advanced-settings.nls.zh-cn.md# 步骤 3 中文版
 
+scripts/
+├── tsconfig.json                        # scripts 独立编译配置（输出到 scripts/out）
+├── check-new-models.mjs                 # 检查 API 新模型
+├── copy-tokenizer.js                    # 拷贝 tokenizer 资源
+├── export-call-logs.mjs                 # 导出全部调用日志为 CSV（cookie 认证）
+├── analyze-call-logs.mjs                # 分析调用日志 CSV（按模型/Key/状态/协议/小时统计）
+└── cookieApi/
+    ├── types.ts                         # 用户中心 API 类型定义（UsageSummary/CallLog 等）
+    ├── cookieApi.ts                     # 用户中心 API 客户端（cookie 认证：余额/调用日志）
+    └── cli.ts                           # 用户中心查询 CLI（临时调试用）
+
 test/
 ├── api-tests.mjs                        # 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses）
 └── README.md                            # 测试说明与平台差异记录（含 Responses 扁平化问题）
@@ -453,6 +464,11 @@ test/
 | `responses/responsesTypes.ts` | ~130 | Responses 类型定义 |
 | `gitCommit/commitMessageGenerator.ts` | ~295 | Git 提交消息生成逻辑 |
 | `gitCommit/gitUtils.ts` | ~260 | Git 命令封装 |
+| `cookieApi/types.ts` | ~150 | 用户中心 API 类型定义（`UsageSummary`, `CallLog`, `CallLogPage`, `CallLogQueryParams`, `CallLogStats`, `ApiResponse`） |
+| `cookieApi/cookieApi.ts` | ~190 | 用户中心 API 客户端：基于 session cookie（`tr_session`）查询余额（`/api/usage-summary`）与调用日志（`/api/call-logs/page`），含自动翻页与统计汇总 |
+| `cookieApi/cli.ts` | ~140 | 用户中心查询 CLI（临时调试用）：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`（编译：`npx tsc -p scripts/tsconfig.json`） |
+| `export-call-logs.mjs` | ~80 | 导出全部调用日志为 CSV（`$env:TR_SESSION="<cookie>"; node scripts/export-call-logs.mjs [startAt] [endAt] [outFile]`） |
+| `analyze-call-logs.mjs` | ~110 | 分析调用日志 CSV 并输出统计（按模型/Key/状态/协议/小时/单次成本 TOP5）：`node scripts/analyze-call-logs.mjs [csv路径]` |
 | `tokenizer/tokenizerManager.ts` | ~115 | o200k_base 分词器管理 (含 LRU 缓存) |
 | `tokenizer/imageUtils.ts` | ~130 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
 | `vision/types.ts` | ~53 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
@@ -829,6 +845,82 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 #### `callVisionModelMulti(images, visionModelId, query, token, progress?): Promise<string>`
 多图版本的视觉模型调用。将多张图片的 `LanguageModelDataPart` 和 query 文本放在同一条消息中发送给视觉模型，使其可以同时看到所有图片进行比较分析。支持流式输出转发。
+
+---
+
+### 4.25 `scripts/cookieApi/types.ts`
+
+#### `interface ApiResponse<T>`
+`{ code, message, data: T, traceId? }` — 用户中心 API 通用响应包装。
+
+#### `interface UsageSummary`
+`{ calls, successCalls, errorCalls, abortedCalls, inputTokens, outputTokens, costCny, balanceCny, frozenBalanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt, currency }` — 用量 + 余额汇总。
+
+#### `interface CallLog`
+单条调用日志完整字段（时间、端点、协议、模型、Key 名称、状态、耗时、Token 用量、成本、finishReason 等）。
+
+#### `interface CallLogPage`
+`{ list: CallLog[] }` — 调用日志分页响应 data。
+
+#### `interface CallLogQueryParams`
+`{ startAt, endAt, page?, pageSize? }` — 调用日志查询参数。
+
+#### `interface CallLogStats`
+`{ total, byModel, byStatus, byKey, totalCostCny }` — 调用日志统计汇总。
+
+---
+
+### 4.26 `scripts/cookieApi/cookieApi.ts`
+
+#### `const COOKIE_API_BASE_URL`
+`"https://tokenrhythm.studio"` — 用户中心 API 基础地址。
+
+#### `const TR_SESSION_COOKIE`
+`"tr_session"` — 登录会话 Cookie 名称常量。
+
+#### `apiGet<T>(sessionCookie, path, params?): Promise<ApiResponse<T>>`
+发送带 cookie 的 GET 请求并解析 JSON。401 时抛出"Cookie 失效"错误，非 2xx 或 `code !== 0` 时抛错。20 秒超时。
+
+#### `queryUsageSummary(sessionCookie): Promise<ApiResponse<UsageSummary>>`
+查询账号用量 + 余额汇总（`GET /api/usage-summary`）。
+
+#### `queryCallLogs(sessionCookie, params: CallLogQueryParams): Promise<CallLog[]>`
+查询调用日志分页（`GET /api/call-logs/page`），返回 `data.list`。
+
+#### `queryAllCallLogs(sessionCookie, startAt, endAt, options?): Promise<CallLog[]>`
+拉取时间范围内全部调用日志，自动翻页（`pageSize` 默认 100，`maxPages` 默认 10）。
+
+#### `summarizeCallLogs(logs: CallLog[]): CallLogStats`
+对调用日志按模型 / 状态 / Key 分组统计，计算总成本。
+
+---
+
+### 4.27 `scripts/cookieApi/cli.ts`
+
+#### `main(): Promise<void>`
+CLI 入口：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`。依次输出账号汇总、调用日志明细表格（最多 50 条）、按模型/状态/Key 统计。
+
+---
+
+### 4.28 `scripts/export-call-logs.mjs`
+
+#### `main 流程`
+全量导出调用日志为 CSV。通过环境变量 `TR_SESSION` 传入 cookie（避免出现在命令行历史），自动翻页（每页 100 条）拉取时间范围内全部调用日志，输出 17 列精简 CSV（`# / requestAt / model / keyName / status / latencyMs / inputTokens / outputTokens / cacheReadTokens / reasoningTokens / costCny / apiSurface / finishReason / traceId / clientApp / stream / retryCount`）。
+
+用法：
+```bash
+$env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [endAt] [outFile]
+```
+默认时间范围 `2026-08-03T00:00:00.000Z ~ 2026-08-05T00:00:00.000Z`，默认输出 `call-logs-export.csv`。
+
+---
+
+### 4.29 `scripts/analyze-call-logs.mjs`
+
+#### `main 流程`
+分析导出的调用日志 CSV，输出统计摘要：调用总数、总成本、总输入/输出/缓存 Token；按模型（次数/成本/Token）、按 Key、按状态、按协议、按小时（UTC）分布；单次成本 TOP5。
+
+用法：`node scripts/analyze-call-logs.mjs [csv路径]`（默认读取 `call-logs-export.csv`）。
 
 ---
 
@@ -1235,6 +1327,9 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 npm run compile
 # 等效于: npx tsc -p ./
 
+# scripts 目录独立编译（cookieApi 等独立脚本，输出到 scripts/out）
+npx tsc -p scripts/tsconfig.json
+
 # ESLint 检查
 npm run lint
 
@@ -1259,6 +1354,9 @@ npm run build
 | `strict` | `true` |
 | `outDir` | `out` |
 | `rootDir` | `src` |
+| `exclude` | `["scripts", "node_modules", "out"]` |
+
+> `scripts/` 目录有独立 `tsconfig.json`（`rootDir: "."`，`outDir: "out"`，仅包含 `cookieApi/**/*.ts`），用 `npx tsc -p scripts/tsconfig.json` 编译，输出到 `scripts/out/`。
 
 ### 5.3 依赖
 
