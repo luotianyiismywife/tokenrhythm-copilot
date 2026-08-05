@@ -27,8 +27,8 @@ import { ResponsesApi } from "./responses/responsesApi";
 import type { AnthropicRequestBody } from "./anthropic/anthropicTypes";
 import { CommonApi, type StreamUsage } from "./commonApi";
 import { callVisionModel, callVisionModelMulti } from "./vision/imageProxy";
-import { ASK_IMAGE_TOOL_NAME, ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_DEF } from "./vision/types";
-import type { InterceptedToolCall, StoredImage } from "./vision/types";
+import { ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_DEF } from "./vision/types";
+import type { StoredImage } from "./vision/types";
 import { logger } from "./logger";
 import { l10n } from "./localize";
 
@@ -842,6 +842,11 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                     } else {
                         body.thinking = { type: "enabled", budget_tokens: 8192 };
                     }
+                } else {
+                    // Match the main Anthropic request (prepareRequestBody): explicitly
+                    // disable thinking when the user turned it off. Without this, the
+                    // Anthropic-compatible endpoint may default thinking back on.
+                    body.thinking = { type: "disabled" };
                 }
 
                 // Inject tools (VS Code + ask_image + ask_with_multi_image)

@@ -1,3 +1,4 @@
+import * as vscode from "vscode";
 import type { LanguageModelChatInformation } from "vscode";
 import type { TokenRhythmModelItem } from "./types";
 import { l10n } from "./localize";
@@ -37,13 +38,43 @@ const DEFAULT_CONTEXT_LENGTH = 128000;
 const DEFAULT_MAX_TOKENS = 4096;
 
 /**
+ * Default ratio of the real context window to declare as `maxInputTokens`.
+ * Overridable via the `tokenrhythm.maxInputTokensRatio` setting.
+ *
+ * VS Code triggers agent auto-compaction (chat.summarizeAgentConversationHistory.enabled)
+ * at ~90% of the declared maxInputTokens. Declaring the full context length
+ * (e.g. 1M tokens) means compaction would only fire at 900K tokens — effectively
+ * never for typical conversations. A lower ratio (e.g. 0.8) makes compaction
+ * fire at ~72% of the real window, leaving headroom.
+ */
+const DEFAULT_MAX_INPUT_TOKENS_RATIO = 1.0;
+/** Lower bound for maxInputTokensRatio — prevents declaring a tiny context that
+ * triggers compaction far too early. */
+const MIN_MAX_INPUT_TOKENS_RATIO = 0.1;
+/** Upper bound — 1.0 means declaring the full context window. */
+const MAX_MAX_INPUT_TOKENS_RATIO = 1.0;
+
+/**
+ * Read the configurable maxInputTokens ratio from the `tokenrhythm.maxInputTokensRatio`
+ * setting and clamp it into the valid range [0.1, 1.0]. Falls back to the default
+ * (1.0) when the setting is missing or invalid.
+ */
+export function getMaxInputTokensRatio(): number {
+    const configured = vscode.workspace.getConfiguration("tokenrhythm").get<number>("maxInputTokensRatio", DEFAULT_MAX_INPUT_TOKENS_RATIO);
+    if (typeof configured !== "number" || !Number.isFinite(configured)) {
+        return DEFAULT_MAX_INPUT_TOKENS_RATIO;
+    }
+    return Math.min(MAX_MAX_INPUT_TOKENS_RATIO, Math.max(MIN_MAX_INPUT_TOKENS_RATIO, configured));
+}
+
+/**
  * Built-in model definitions.
  *
  * Model list sourced from the TokenRhythm model page:
  * https://tokenrhythm.studio/models
  * (deepseek-v4-flash / deepseek-v4-pro / deepseek-v4-flash-0731 / glm-5 / glm-5.1 /
  *  glm-5.2 / kimi-k2.5 / kimi-k2.6 / kimi-k2.7-code / mimo-v2.5-pro /
- *  minimax-m2.5 / minimax-m2.7 / qwen3.7-max)
+ *  minimax-m2.5 / minimax-m2.7 / qwen3.7-max / qwen3.8-max)
  *
  * Image-generation models (qwen-image-2.0 / wan2.7-image) are excluded — they
  * cannot be used for chat.
@@ -77,7 +108,18 @@ const BUILT_IN_MODELS: BuiltInModelDef[] = [
     // startup from /v1/models (supports_responses) in provideModel.ts, so any
     // model that gains Responses support is picked up automatically.
     { baseId: "qwen3.7-max", displayName: "Qwen3.7 Max", vision: false, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 134218 },
+    // qwen3.8-max supports text + image input (vision=true), same 1M context / 131.1K output.
+    { baseId: "qwen3.8-max", displayName: "Qwen3.8 Max", vision: true, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 134218 },
 ];
+
+/**
+ * Get the set of built-in model base IDs.
+ * Used by the startup model sync (src/modelSync.ts) to detect new models
+ * returned by the API that are not yet in the built-in list.
+ */
+export function getBuiltInModelIds(): Set<string> {
+    return new Set(BUILT_IN_MODELS.map((m) => m.baseId));
+}
 
 /**
  * Get the built-in model list as LanguageModelChatInformation[].
@@ -90,7 +132,10 @@ export function getBuiltInModelInfos(): LanguageModelChatInformation[] {
     const infos: LanguageModelChatInformation[] = [];
 
     for (const def of BUILT_IN_MODELS) {
-        const maxInput = def.contextLength ?? DEFAULT_CONTEXT_LENGTH;
+        // Declare maxInputTokens as a configurable ratio (default 80%) of the real
+        // context window so VS Code's agent auto-compaction (~90% of maxInputTokens)
+        // fires before the context actually fills up.
+        const maxInput = Math.floor((def.contextLength ?? DEFAULT_CONTEXT_LENGTH) * getMaxInputTokensRatio());
 
         const info: LanguageModelChatInformation = {
             id: def.baseId,

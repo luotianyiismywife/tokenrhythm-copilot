@@ -77,10 +77,12 @@ The extension ships with built-in definitions for the following TokenRhythm chat
 | `minimax-m2.7` | 200K | 192K | ❌ | ❌ |
 | `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
 | `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
+| `qwen3.8-max`³ | 1M | 131.1K | ✅ | ✅ |
 
 > All models support the OpenAI-compatible protocol. The **Responses API** column shows which models additionally support the Responses protocol (supports_responses=true); most models also support Anthropic (supports_anthropic=true). Protocol capability is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded. In `auto` mode, priority: Responses (if `enableResponsesApi` enabled) > Anthropic (if `enableAnthropicApi` enabled) > OpenAI.
 > ¹ `kimi-k2.7-code` does not support temperature/top_p parameters.
 > ² `qwen3.7-max` does not support the Anthropic protocol (supports_anthropic=false).
+> ³ `qwen3.8-max` (in testing) supports text + image input and the Responses protocol natively.
 
 > [!TIP]
 > Automatic model discovery is enabled by default: the extension fetches the live model list from `GET /v1/models` and hides models that are not available on your account. Image-generation models (`qwen-image-2.0`, `wan2.7-image`) are excluded from the picker.
@@ -100,6 +102,8 @@ Available in `settings.json`:
   "tokenrhythm.commitIncludeCommitDiff": false,
   "tokenrhythm.commitAttachContextFiles": true,
   "tokenrhythm.enableAutoModelDiscovery": true,
+  "tokenrhythm.syncModelsOnStartup": true,
+  "tokenrhythm.maxInputTokensRatio": 1.0,
   "tokenrhythm.enableThirdPartyTokenIndicator": true,
   "tokenrhythm.enableResponsesApi": false,
   "tokenrhythm.enableAnthropicApi": false
@@ -118,6 +122,8 @@ Available in `settings.json`:
 | `tokenrhythm.visionProxyModel` | `kimi-k2.6` | Vision model used by the `ask_image` tool when the selected model does not support vision. |
 | `tokenrhythm.visionProxyThinking` | `false` | Enable thinking/reasoning in the vision proxy model when answering image queries. |
 | `tokenrhythm.enableAutoModelDiscovery` | `true` | Automatically fetch the live model list from `GET /v1/models` and hide models unavailable on your account. |
+| `tokenrhythm.syncModelsOnStartup` | `true` | Check for new TokenRhythm models on startup, at most once per day. Every sync event is recorded in the workspace `.copilot/model-sync-log.md` (falls back to the extension's global storage when no workspace folder is open). |
+| `tokenrhythm.maxInputTokensRatio` | `1.0` | Ratio of the real context window declared as `maxInputTokens` (0.1 - 1.0). VS Code's agent auto-compaction triggers at ~90% of the declared value. **Recommended: 0.8** so compaction fires at ~72% of the real window, preventing context overflow on large-window BYOK models. The `context_length` sent in API requests always uses the real value. |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | Show the advanced token counter in the status bar while using TokenRhythm models. |
 | `tokenrhythm.enableResponsesApi` | `false` | Use the Responses API protocol in `auto` mode for models detected as supports_responses=true at startup (from `GET /v1/models` — dynamic, no hardcoded model IDs). **Disabled by default**: the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, non-standard multi-round tool backfill), so models fall back to the more mature OpenAI-compatible format. Enable only to try the Responses protocol. |
 | `tokenrhythm.enableAnthropicApi` | `false` | Use the Anthropic Messages protocol in `auto` mode for models detected as supports_anthropic=true at startup (dynamic, no hardcoded model IDs). **Disabled by default**. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI. |
@@ -196,10 +202,12 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `minimax-m2.7` | 200K | 192K | ❌ | ❌ |
 | `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
 | `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
+| `qwen3.8-max`³ | 1M | 131.1K | ✅ | ✅ |
 
 > 所有模型均支持 OpenAI 兼容协议。**Responses API** 列标注哪些模型额外支持 Responses 协议（supports_responses=true）；大多数模型也支持 Anthropic（supports_anthropic=true）。协议能力在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID。auto 模式下优先级：Responses（若开启 `enableResponsesApi`）> Anthropic（若开启 `enableAnthropicApi`）> OpenAI。
 > ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
 > ² `qwen3.7-max` 不支持 Anthropic 协议（supports_anthropic=false）。
+> ³ `qwen3.8-max`（测试中）支持文本与图像输入，原生支持 Responses 协议。
 
 > [!TIP]
 > 自动模型发现默认开启：扩展会从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不会出现在选择器中。
@@ -234,6 +242,8 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
   "tokenrhythm.commitIncludeCommitDiff": false,
   "tokenrhythm.commitAttachContextFiles": true,
   "tokenrhythm.enableAutoModelDiscovery": true,
+  "tokenrhythm.syncModelsOnStartup": true,
+  "tokenrhythm.maxInputTokensRatio": 1.0,
   "tokenrhythm.enableThirdPartyTokenIndicator": true,
   "tokenrhythm.enableResponsesApi": false,
   "tokenrhythm.enableAnthropicApi": false
@@ -252,6 +262,8 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `tokenrhythm.visionProxyModel` | `kimi-k2.6` | 用于 ask_image 工具的视觉模型 ID。当所选模型不支持视觉时，该模型用于回答图片相关问题。 |
 | `tokenrhythm.visionProxyThinking` | `false` | 在视觉代理模型回答图片查询时启用思考/推理功能。 |
 | `tokenrhythm.enableAutoModelDiscovery` | `true` | 自动从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。 |
+| `tokenrhythm.syncModelsOnStartup` | `true` | 启动时自动检查是否有新的 TokenRhythm 模型（每日最多一次）。每次同步事件记录在工作区的 `.copilot/model-sync-log.md` 文件中（无工作区时回退到扩展的全局存储目录）。 |
+| `tokenrhythm.maxInputTokensRatio` | `1.0` | 每个模型声明为 `maxInputTokens` 的真实上下文窗口比例（0.1 - 1.0）。VS Code 的 agent 自动压缩约在声明的 maxInputTokens 的 90% 处触发。**建议设为 0.8** —— 可使压缩在真实窗口约 72% 处触发，防止 BYOK 大窗口模型上下文溢出。API 请求体中的 context_length 始终使用真实值。 |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | 使用 TokenRhythm 模型时在状态栏显示高级 Token 计数器。 |
 | `tokenrhythm.enableResponsesApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_responses=true 的模型（来自 `GET /v1/models`——动态探测，不硬编码模型 ID）使用 Responses 协议。**默认关闭**：TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认回退到更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。 |
 | `tokenrhythm.enableAnthropicApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_anthropic=true 的模型（动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭**。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。 |

@@ -28,6 +28,9 @@ let cachedModelIds: string[] | null = null;
 let cachedModelMetadata: ApiModelMetadata[] | null = null;
 let cacheTimestamp = 0;
 let lastFetchSuccess = false;
+/** In-flight fetch promise — deduplicates concurrent calls (e.g. startup model
+ * sync + model list request racing) so the API is only hit once. */
+let inFlightFetch: Promise<void> | null = null;
 
 /**
  * Fetch the model list from the API's /models endpoint.
@@ -113,16 +116,29 @@ async function ensureApiModelCache(apiKey: string | undefined): Promise<void> {
         return;
     }
 
-    try {
-        const models = await fetchApiModelList(apiKey);
-        cachedModelIds = models.map((m) => m.id);
-        cachedModelMetadata = models;
-        cacheTimestamp = now;
-        lastFetchSuccess = true;
-    } catch {
-        // API call failed — keep stale cache if available
-        lastFetchSuccess = false;
+    // Deduplicate concurrent fetches: if a fetch is already in flight (e.g.
+    // startup model sync and the model list request running at the same time),
+    // reuse its promise instead of issuing a second request.
+    if (inFlightFetch) {
+        return inFlightFetch;
     }
+
+    inFlightFetch = (async () => {
+        try {
+            const models = await fetchApiModelList(apiKey);
+            cachedModelIds = models.map((m) => m.id);
+            cachedModelMetadata = models;
+            cacheTimestamp = Date.now();
+            lastFetchSuccess = true;
+        } catch {
+            // API call failed — keep stale cache if available
+            lastFetchSuccess = false;
+        }
+    })().finally(() => {
+        inFlightFetch = null;
+    });
+
+    return inFlightFetch;
 }
 
 /**

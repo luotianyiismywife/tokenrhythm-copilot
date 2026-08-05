@@ -8,7 +8,7 @@ export class VersionManager {
      */
     static getVersion(): string {
         if (this._version === null) {
-            const extension = vscode.extensions.getExtension("my-company.tokenrhythm-copilot");
+            const extension = vscode.extensions.getExtension("luotianyiismywife.tokenrhythm-copilot-provider");
             this._version = extension?.packageJSON?.version ?? "unknown";
         }
         return this._version!;
@@ -29,7 +29,7 @@ export class VersionManager {
         return {
             name: "tokenrhythm-copilot",
             version: this.getVersion(),
-            author: "my-company",
+            author: "luotianyiismywife",
         };
     }
 }

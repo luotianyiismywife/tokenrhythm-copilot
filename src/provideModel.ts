@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import { CancellationToken, LanguageModelChatInformation, LanguageModelChatCapabilities, PrepareLanguageModelChatModelOptions } from "vscode";
+import { CancellationToken, LanguageModelChatInformation, PrepareLanguageModelChatModelOptions } from "vscode";
 
 import { logger } from "./logger";
-import { getBuiltInModelInfos } from "./models";
+import { getBuiltInModelInfos, getMaxInputTokensRatio } from "./models";
 import { getApiModelIds, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful } from "./apiModelList";
 import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
 import type { TokenRhythmModelItem } from "./types";
@@ -57,11 +57,6 @@ function buildAutoDiscoveredInfo(
     modelId: string,
     entry: ModelsDevEntry | undefined
 ): LanguageModelChatInformation | undefined {
-    // Determine vision support
-    const modalities = entry?.modalities?.input ?? [];
-    const hasImage = modalities.includes("image") || modalities.includes("video");
-    const vision = entry?.attachment === true || hasImage;
-
     // Determine display name
     const displayName = entry?.name ?? modelId;
 
@@ -79,20 +74,17 @@ function buildAutoDiscoveredInfo(
     let enumValues: string[];
     let enumItemLabels: string[];
     let enumDescriptions: string[];
-    let defaultEffort: string;
 
     if (hasReasoning) {
         // switchable: user can turn thinking on/off
         enumValues = ["disabled", "enabled"];
         enumItemLabels = [l10n("Disabled"), l10n("Thinking")];
         enumDescriptions = [l10n("Do not enable thinking"), l10n("Enable thinking")];
-        defaultEffort = "enabled";
     } else {
         // always: thinking not supported, no toggle
         enumValues = ["enabled"];
         enumItemLabels = [l10n("Thinking")];
         enumDescriptions = [l10n("Enable thinking")];
-        defaultEffort = "enabled";
     }
 
     // Create the entry
@@ -103,7 +95,10 @@ function buildAutoDiscoveredInfo(
         tooltip: "TokenRhythm",
         family: EXTENSION_LABEL,
         version: "1.0.0",
-        maxInputTokens: contextLength,
+        // Declare maxInputTokens as a configurable ratio (default 80%) of the real
+        // context window so VS Code's agent auto-compaction (~90% of maxInputTokens)
+        // can fire before the context actually fills up.
+        maxInputTokens: Math.floor(contextLength * getMaxInputTokensRatio()),
         maxOutputTokens: maxOutputTokens,
         isUserSelectable: true,
         capabilities: {

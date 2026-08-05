@@ -22,7 +22,6 @@ import {
     isImageMimeType,
     createDataUrl,
     isToolResultPart,
-    collectToolResultText,
     convertToolsToOpenAI,
     mapRole,
     storeDataUriImages,
@@ -32,7 +31,7 @@ import {
 import { CommonApi, StreamUsage } from "../commonApi";
 import { logger } from "../logger";
 import type { StoredImage } from "../vision/types";
-import { ASK_IMAGE_TOOL_NAME, ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_DEF } from "../vision/types";
+import { ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_DEF } from "../vision/types";
 
 export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unknown>> {
     constructor(modelId: string) {

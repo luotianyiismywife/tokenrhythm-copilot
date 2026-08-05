@@ -6,6 +6,7 @@ import { l10n, l10nFormat } from "./localize";
 import type { ModelPreset } from "./types";
 import { abortCommitGeneration, generateCommitMsg } from "./gitCommit/commitMessageGenerator";
 import { TokenizerManager } from "./tokenizer/tokenizerManager";
+import { syncModelsOnStartup } from "./modelSync";
 
 // ---- Walkthrough / Welcome constants ----
 
@@ -27,12 +28,6 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register the TokenRhythm provider under the vendor id used in package.json
     vscode.lm.registerLanguageModelChatProvider("tokenrhythm", provider);
-
-    // Helper: check if an API key is stored (without prompting)
-    const hasApiKey = async (): Promise<boolean> => {
-        const key = await context.secrets.get("tokenrhythm.apiKey");
-        return !!key;
-    };
 
     // Management command to configure API key
     context.subscriptions.push(
@@ -198,6 +193,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Show welcome walkthrough on first install (when no API key is configured)
     showWelcomeIfNeeded(context);
+
+    // Startup model sync — checks for new TokenRhythm models at most once per
+    // day and appends the event to .copilot/model-sync-log.md. Fire-and-forget:
+    // never blocks activation, all errors are handled internally.
+    syncModelsOnStartup(context);
 
     // Dispose logger on deactivate
     context.subscriptions.push({

@@ -315,24 +315,6 @@ export function isToolResultPart(
 }
 
 /**
- * Collect text content from a tool result part.
- */
-export function collectToolResultText(part: {
-    content?: ReadonlyArray<unknown>;
-}): string {
-    if (!part.content) {
-        return "";
-    }
-    const texts: string[] = [];
-    for (const item of part.content) {
-        if (item instanceof vscode.LanguageModelTextPart) {
-            texts.push(item.value);
-        }
-    }
-    return texts.join("\n").trim();
-}
-
-/**
  * Safely try to parse a JSON object from a string.
  * Returns { ok: true, value } or { ok: false }.
  */

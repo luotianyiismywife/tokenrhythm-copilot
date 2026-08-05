@@ -27,13 +27,15 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
-| **多模型支持** | 内置 13 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
+| **多模型支持** | 内置 14 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL） |
+| **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步事件追加记录到工作区 `.copilot/model-sync-log.md`（无工作区时回退到扩展全局存储目录），事件含时间/结果/发现的新模型列表。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
 | **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持协议的模型自动生效）。**auto 模式优先级**：`enableResponsesApi`（默认关闭）→ `enableAnthropicApi`（默认关闭）→ 兜底 OpenAI。默认关闭原因：TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式 |
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
 | **工具调用 (Tool Calling)** | 支持 VS Code 的 LanguageModelToolCallPart 机制 |
 | **图片代理 (Tool-based)** | 为不支持视觉的模型注入 `ask_image` 工具，模型可自主选择调用视觉模型（默认 Kimi K2.6）回答关于图片的具体问题，支持两轮 API 请求完成"调用工具→提问→获取答案→继续回答"的完整流程。与旧版 `describe_image` 不同，`ask_image` 允许模型针对图片提出具体问题（如"按钮是什么颜色？"），视觉模型会针对性回答。视觉模型 ID、查询提示词和思考模式均可通过设置配置；视觉代理会在同一个 thinking 块中显示“正在根据图片提问：[问题]”并实时追加视觉模型流式输出 |
+| **上下文窗口声明** | `maxInputTokens` 按真实上下文窗口的**可配置比例**声明（内置模型与自动发现模型均适用，默认 `1.0` 即完整窗口，可通过设置 `tokenrhythm.maxInputTokensRatio` 调整，范围 0.1–1.0，**建议 0.8**）。VS Code agent 模式的自动压缩（`chat.summarizeAgentConversationHistory.enabled`，约在 `maxInputTokens` 的 90% 触发）在比例 0.8 时于真实上下文的约 **72%** 处触发，避免按完整上下文（如 1M token）声明时压缩永不触发的问题。`context_length` / `max_completion_tokens` 保持真实值不变（用于 API 请求体） |
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
@@ -62,13 +64,14 @@
 | DeepSeek | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`³ | ❌ | `禁用思考` / `高` / `极高` | OpenAI / Responses⁵ |
 | MiMo | `mimo-v2.5-pro` | ❌ | `禁用思考` / `思考` | OpenAI |
 | MiniMax | `minimax-m2.7`, `minimax-m2.5` | ❌ | `思考`（不支持思考切换） | OpenAI |
-| Qwen | `qwen3.7-max`⁴ | ❌ | `禁用思考` / `思考` | OpenAI / Responses⁵ |
+| Qwen | `qwen3.7-max`⁴, `qwen3.8-max`⁶ | ❌/✅⁶ | `禁用思考` / `思考` | OpenAI / Responses⁵ |
 
 > ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
 > ² GLM-5.2 支持通过 reasoning_effort 设置 thinking 强度 (high/max)，GLM-5.1/GLM-5 不支持 thinking 切换。
 > ³ `deepseek-v4-flash-0731` 同时支持 OpenAI 与 Responses 协议（supports_responses=true）。
 > ⁴ `qwen3.7-max` 仅支持 OpenAI/Responses 协议（supports_anthropic=false）。
 > ⁵ Responses 能力**动态探测**：启动时读取 `/v1/models` 的 `supports_responses` 标记，不硬编码模型 ID——未来任何模型获得 Responses 支持都会自动生效。协议**默认关闭**（`enableResponsesApi=false`），默认使用 OpenAI 兼容格式。
+> ⁶ `qwen3.8-max`（测试中）支持文本与图像输入（视觉 ✅），1M 上下文 / 131.1K 输出，原生支持 Responses API。
 
 > 模型清单来源于 [TokenRhythm 模型页](https://tokenrhythm.studio/models)。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不适用于 Chat，已排除。
 
@@ -139,6 +142,7 @@ activate(context)
   │   ├── tokenrhythm.abortGitCommitMessage    ← 中止生成
   │   └── tokenrhythm.setModelPreset           ← 设置模型预设
   ├── showWelcomeIfNeeded()                 ← 首次安装时显示欢迎向导
+  ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，记录到 .copilot/model-sync-log.md）
   └── 注册 dispose 清理
 ```
 
@@ -388,6 +392,7 @@ src/
 ├── logger.ts                             # 日志系统
 ├── models.ts                             # 内置模型定义清单
 ├── modelsDev.ts                          # models.dev 元数据拉取与查询
+├── modelSync.ts                          # 启动模型同步（每日一次，记录到 .copilot/model-sync-log.md）
 ├── provideModel.ts                       # 模型信息提供函数（含自动发现）
 ├── provider.ts                           # Chat 模型提供商 (核心主文件)
 ├── provideToken.ts                       # Token 计数函数
@@ -424,6 +429,7 @@ src/
 
 scripts/
 ├── tsconfig.json                        # scripts 独立编译配置（输出到 scripts/out）
+├── build-info.mjs                       # 编译元信息生成（out/build-info.json + .copilot/build-log.md，compile 后自动运行）
 ├── check-new-models.mjs                 # 检查 API 新模型
 ├── copy-tokenizer.js                    # 拷贝 tokenizer 资源
 ├── export-call-logs.mjs                 # 导出全部调用日志为 CSV（cookie 认证）
@@ -436,6 +442,10 @@ scripts/
 test/
 ├── api-tests.mjs                        # 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses）
 └── README.md                            # 测试说明与平台差异记录（含 Responses 扁平化问题）
+
+.copilot/
+├── build-log.md                        # 编译日志（每次 npm run compile 由 build-info.mjs 追加，含版本号+时区）
+└── model-sync-log.md                    # 启动模型同步日志（扩展自动追加，含模板表头）
 ```
 
 ### 3.2 文件详细说明
@@ -444,10 +454,11 @@ test/
 |------|------|------|
 | `extension.ts` | ~210 | 扩展激活/停用，注册 Provider 和 6 条命令，首次安装欢迎页引导 |
 | `provider.ts` | ~950 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由）及图片代理多轮循环处理 |
-| `models.ts` | ~230 | 13 个内置模型定义，模型配置查询（所有模型声明 `imageInput: true`） |
+| `models.ts` | ~230 | 14 个内置模型定义，模型配置查询（所有模型声明 `imageInput: true`） |
 | `types.ts` | ~95 | `TokenRhythmModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
 | `apiModelList.ts` | ~120 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
 | `modelsDev.ts` | ~130 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
+| `modelSync.ts` | ~160 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），事件追加到 `.copilot/model-sync-log.md`（无工作区时回退全局存储），无 Key/API 不可用记录失败且不标记已同步 |
 | `commonApi.ts` | ~462 | `CommonApi<TMessage,TRequestBody>` 抽象基类（图片存储、工具调用拦截） |
 | `provideModel.ts` | ~130 | 模型信息提供函数（含自动发现）：过滤内置模型、从 API 和 models.dev 自动发现新增模型 |
 | `provideToken.ts` | ~100 | Token 用量计算 |
@@ -469,6 +480,7 @@ test/
 | `cookieApi/cli.ts` | ~140 | 用户中心查询 CLI（临时调试用）：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`（编译：`npx tsc -p scripts/tsconfig.json`） |
 | `export-call-logs.mjs` | ~80 | 导出全部调用日志为 CSV（`$env:TR_SESSION="<cookie>"; node scripts/export-call-logs.mjs [startAt] [endAt] [outFile]`） |
 | `analyze-call-logs.mjs` | ~110 | 分析调用日志 CSV 并输出统计（按模型/Key/状态/协议/小时/单次成本 TOP5）：`node scripts/analyze-call-logs.mjs [csv路径]` |
+| `build-info.mjs` | ~90 | 编译元信息生成：`npm run compile` 后自动运行，写入 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加 `.copilot/build-log.md`（编译日志） |
 | `tokenizer/tokenizerManager.ts` | ~115 | o200k_base 分词器管理 (含 LRU 缓存) |
 | `tokenizer/imageUtils.ts` | ~130 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
 | `vision/types.ts` | ~53 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
@@ -521,7 +533,7 @@ test/
 - 视觉模型调用期间用户取消则跳过本轮。
 - 每轮创建独立 AbortController，带独立超时。
 - 每轮注入 VS Code 原生工具 + ask_image + ask_with_multi_image，确保模型可以混合使用。
-- Anthropic 模式额外恢复 `system` 内容（`_systemContent`）和 `thinking` 参数。
+- Anthropic 模式额外恢复 `system` 内容（`_systemContent`）和 `thinking` 参数（启用→`{ type: "enabled", budget_tokens: 8192 }` / adaptive→`{ type: "adaptive" }` / 禁用→`{ type: "disabled" }`，与主请求 `prepareRequestBody` 保持一致）。
 - Responses 模式使用文本化回填（assistant `output_text` + user `input_text`，因端点拒绝 function_call 块）。
 - 第二轮及后续轮次请求体中显式设置 `tool_choice` 为 `"auto"`（OpenAI）或 `{ type: "auto" }`（Anthropic），确保模型可继续调用工具。
 - 使用 `_resetStreamState()` 重置流状态，避免 `_completedToolCallIndices` 等状态在轮次间残留导致工具调用被跳过。
@@ -553,13 +565,19 @@ test/
 | `apiMode` | `"openai" \| "anthropic" \| "responses"` (可选) | API 格式模式 |
 
 #### `const BUILT_IN_MODELS: BuiltInModelDef[]`
-13 个内置模型定义常量数组（来源：[TokenRhythm 模型页](https://tokenrhythm.studio/models)）。
+14 个内置模型定义常量数组（来源：[TokenRhythm 模型页](https://tokenrhythm.studio/models)）。
 
 #### `getBuiltInModelInfos(): LanguageModelChatInformation[]`
-将内置模型定义转换为 VS Code 的模型信息列表。每个模型注册**一个条目**，带 `isUserSelectable: true` 确保在模型选择器中可见（VS Code 1.120+ 要求），并通过 `configurationSchema` 附加推理强度选择器（中文标签）。switchable 模型显示 `禁用思考/思考` 或 `禁用思考/高/最大`（可关闭推理）；adaptive 模型仅显示 `禁用思考/自动`；always 模型不显示 `禁用思考` 选项，仅在支持推理强度时显示强度选项。
+将内置模型定义转换为 VS Code 的模型信息列表。每个模型注册**一个条目**，带 `isUserSelectable: true` 确保在模型选择器中可见（VS Code 1.120+ 要求），并通过 `configurationSchema` 附加推理强度选择器（中文标签）。switchable 模型显示 `禁用思考/思考` 或 `禁用思考/高/最大`（可关闭推理）；adaptive 模型仅显示 `禁用思考/自动`；always 模型不显示 `禁用思考` 选项，仅在支持推理强度时显示强度选项。`maxInputTokens` 按真实上下文窗口的**可配置比例**声明（`getMaxInputTokensRatio()` 读取 `tokenrhythm.maxInputTokensRatio` 设置，默认 `1.0`，建议 `0.8`，`Math.floor` 取整，范围 0.1–1.0），使 VS Code 的 agent 自动压缩（约 90% 阈值）能在真实上下文的约 72%（比例 0.8 时）处触发；`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
 
 #### `getBuiltInModelCount(): number`
 返回内置模型定义总数（BUILT_IN_MODELS.length）。
+
+#### `getBuiltInModelIds(): Set<string>`
+返回所有内置模型的 baseId 集合。供 `src/modelSync.ts` 在启动同步时对比 API 模型列表，检测不在内置列表中的新模型。
+
+#### `getMaxInputTokensRatio(): number`
+读取可配置的 `maxInputTokens` 声明比例（设置 `tokenrhythm.maxInputTokensRatio`，默认 `1.0`，建议 `0.8`），并夹取到合法范围 [0.1, 1.0]。设置缺失或非法时回退到默认值。`maxInputTokens` 按真实上下文窗口 × 该比例声明（`Math.floor` 取整），使 VS Code 的 agent 自动压缩（约 90% 阈值）能在真实上下文的约 72%（比例 0.8 时）处触发；`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
 
 #### `getBuiltInModelConfig(modelId: string): TokenRhythmModelItem | undefined`
 按模型 ID 查找内置模型定义，返回对应的模型配置对象（含 thinkingMode、默认推理力度、API 模式、extra 参数等）。思考模式的具体启用状态由 provider.ts 根据 reasoningEffort 配置动态决定。
@@ -723,10 +741,30 @@ API 实现的抽象基类。
 
 ---
 
+### 4.8 `src/modelSync.ts`
+
+#### `syncModelsOnStartup(context): Promise<void>`
+启动模型同步入口（fire-and-forget，不阻塞扩展激活）。流程：
+1. 读取 `tokenrhythm.syncModelsOnStartup` 配置（默认开启），关闭则直接返回。
+2. 检查 `globalState` 的 `tokenrhythm.lastModelSyncDate`（上次成功同步日期），若等于今天（本地时间 `YYYY-MM-DD`）则跳过。
+3. 从 `SecretStorage` 获取 API Key；缺失时记录 `⏭️ 跳过` 事件并返回（不标记已同步，下次打开重试）。
+4. `ensureModelsDevLoaded()` 预热 models.dev 元数据缓存（1 小时 TTL）。
+5. `getApiModelIds()` 拉取 API 模型列表；`isApiFetchSuccessful()` 为 false 或列表为空时记录 `❌ 失败` 事件并返回（不标记已同步）。
+6. 用 `getBuiltInModelIds()` 对比，找出不在内置列表中的新模型。
+7. `appendSyncEvent()` 记录 `✅ 成功` 事件（含新模型列表）；成功后 `globalState.update()` 标记今日已同步。
+
+#### `appendSyncEvent(context, status, detail): Promise<void>`
+将一条同步事件追加到 Markdown 日志文件。日志位置：工作区 `.copilot/model-sync-log.md`（优先）；无工作区文件夹时回退到扩展 `globalStorageUri`。文件不存在时自动创建（含表头）。行格式：`| 时间 | 结果 | 说明 |`，说明中的 `|` 会被转义。写入失败仅记日志，不影响启动流程。
+
+#### `resolveSyncLogUri(context): vscode.Uri`
+解析同步日志文件 URI：优先第一个工作区文件夹的 `.copilot/model-sync-log.md`，否则 `context.globalStorageUri`。
+
+---
+
 ### 4.10 `src/provideModel.ts`
 
 #### `prepareLanguageModelChatInformation(options, _token, _secrets): Promise<LanguageModelChatInformation[]>`
-获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。API 不可用时静默回退到全量内置列表。
+获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
 
 #### `getResponsesModelIds(): Set<string>`
 同步返回当前探测到的 supports_responses=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Responses 协议。
@@ -804,9 +842,6 @@ API 实现的抽象基类。
 
 #### `isToolResultPart(part): boolean`
 判断是否为 `LanguageModelToolResultPart`。
-
-#### `collectToolResultText(part): string`
-收集工具结果中的文本内容。
 
 #### `tryParseJSONObject(text): { ok: true, value } | { ok: false }`
 安全尝试解析 JSON 对象字符串。
@@ -1344,6 +1379,8 @@ npm run build
 # 等效于: npx @vscode/vsce package -o extension.vsix
 ```
 
+> `npm run compile` 在 `tsc` 编译后自动运行 `scripts/build-info.mjs`，生成 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加记录到 `.copilot/build-log.md`。详见 6.1b「编译产物元信息铁律」。
+
 ### 5.2 编译配置 (tsconfig.json)
 
 | 选项 | 值 |
@@ -1383,6 +1420,18 @@ npm run build
 > npx tsc --noEmit
 > ```
 > 任何编译错误（包括类型错误）必须在提交前修复。
+
+### 6.1b **编译产物元信息铁律**
+
+> **每次编译产物必须包含版本号和编译时间（标注时区）。**
+>
+> `npm run compile` 会在 `tsc` 编译后自动运行 `scripts/build-info.mjs`，生成：
+> - `out/build-info.json` —— 随扩展打包的编译元信息（`version` / `buildTime`（UTC ISO 8601）/ `buildTimeLocal` / `timezone`（IANA 时区）/ `timezoneOffset`（UTC 偏移）/ `buildTimeDisplay`（本地时间 + 时区 + UTC 偏移））
+> - `.copilot/build-log.md` —— 开发者侧编译日志，每次编译追加一行（编译时间 + 版本号 + 时区）
+>
+> **时区标注规则**：时间必须同时标注 IANA 时区 ID（如 `Asia/Shanghai`）和 UTC 偏移（如 `UTC+08:00`），避免跨机器/跨时区追溯产物时产生歧义。
+> 禁止手动编辑 `out/build-info.json` 和 `.copilot/build-log.md`（由脚本自动生成）。
+> 若编译产物缺少元信息（`out/build-info.json` 不存在），视为编译未完成，不得打包发布。
 
 ### 6.2 **AGENTS.md 同步更新铁律**
 
