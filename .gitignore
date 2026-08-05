@@ -6,8 +6,7 @@ out/
 scripts/out/
 
 # VSIX package
-extension.vsix
-tokenrhythm-copilot.vsix
+*.vsix
 
 # VS Code
 .vscode/settings.json
