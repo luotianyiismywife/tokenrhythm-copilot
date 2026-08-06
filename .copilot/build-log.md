@@ -14,3 +14,9 @@
 | 2026/8/5 18:16:33 | 1.4.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
 | 2026/8/5 18:18:25 | 1.4.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
 | 2026/8/5 18:20:27 | 1.4.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
+| 2026/8/6 16:41:53 | 1.4.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
+| 2026/8/6 17:08:29 | 1.4.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
+| 2026/8/6 17:25:34 | 1.4.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
+| 2026/8/6 17:32:56 | 1.5.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
+| 2026/8/6 17:33:15 | 1.5.0 | Asia/Shanghai (UTC+08:00) | npm run compile |
+| 2026/8/6 17:40:17 | 1.5.0 | Asia/Shanghai (UTC+08:00) | npm run compile |

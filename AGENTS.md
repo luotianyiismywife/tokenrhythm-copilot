@@ -28,9 +28,9 @@
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
 | **多模型支持** | 内置 14 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
-| **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL） |
+| **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `tokenrhythm.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步事件追加记录到工作区 `.copilot/model-sync-log.md`（无工作区时回退到扩展全局存储目录），事件含时间/结果/发现的新模型列表。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
-| **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持协议的模型自动生效）。**auto 模式优先级**：`enableResponsesApi`（默认关闭）→ `enableAnthropicApi`（默认关闭）→ 兜底 OpenAI。默认关闭原因：TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式 |
+| **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持协议的模型自动生效）。**auto 模式优先级**：`enableResponsesApi`（默认关闭）→ `enableAnthropicApi`（默认关闭）→ 兜底 OpenAI。默认关闭原因：① TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规）；② **Anthropic 格式对部分模型存在兼容性 bug**（如 DeepSeek 系列强制思考 + temperature/top_p → 400"请求参数组合无效"，2026-08-06 实测，插件已修复仅强制思考时跳过温度）。**建议默认使用更成熟的 OpenAI 兼容格式** |
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
 | **工具调用 (Tool Calling)** | 支持 VS Code 的 LanguageModelToolCallPart 机制 |
@@ -440,7 +440,7 @@ scripts/
     └── cli.ts                           # 用户中心查询 CLI（临时调试用）
 
 test/
-├── api-tests.mjs                        # 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses）
+├── api-tests.mjs                        # 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例）
 └── README.md                            # 测试说明与平台差异记录（含 Responses 扁平化问题）
 
 .copilot/
@@ -514,6 +514,9 @@ test/
 
 #### `constructor(secrets: vscode.SecretStorage, statusBarItem: vscode.StatusBarItem)`
 构造函数，接收密钥存储和状态栏条目。
+
+#### `notifyModelListChanged(): void`
+触发 `onDidChangeLanguageModelChatInformation` 事件，通知 VS Code 模型列表可能已变化（如 `tokenrhythm.apiMode` 切换），VS Code 会重新调用 `provideLanguageModelChatInformation` 刷新选择器。由 `extension.ts` 在 `onDidChangeConfiguration` 中调用。
 
 #### `private _createFetchWithTimeout(requestTimeoutMs: number): typeof fetch`
 创建 undici fetch 实例，设置自定义 `bodyTimeout` 防止流式响应中 TCP 空闲连接被提前关闭。回退到全局 `fetch`。
@@ -764,7 +767,7 @@ API 实现的抽象基类。
 ### 4.10 `src/provideModel.ts`
 
 #### `prepareLanguageModelChatInformation(options, _token, _secrets): Promise<LanguageModelChatInformation[]>`
-获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
+获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。**末尾按 `tokenrhythm.apiMode` 过滤**：`anthropic` 仅保留 `supports_anthropic=true` 的模型，`responses` 仅保留 `supports_responses=true` 的模型（能力集合为空时回退全部）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
 
 #### `getResponsesModelIds(): Set<string>`
 同步返回当前探测到的 supports_responses=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Responses 协议。
@@ -1140,7 +1143,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 将 VS Code 消息转换为 Anthropic 格式。系统消息提取到 `_systemContent`。支持文本、图片、工具使用、工具结果、推理内容。使用 `content` 块数组格式。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。同时递归扫描 `AnthropicToolResultBlock.content` 中的图片一并存入（确保通过工具返回的图片也能被 `ask_image` 代理识别）。
 
 #### `prepareRequestBody(rb, um?, options?): AnthropicRequestBody`
-构建 Anthropic 请求体。设置 max_tokens、system、temperature、top_p、top_k、thinking 模式（支持 `{ type: "enabled" }`、`{ type: "adaptive" }` 和 `{ type: "disabled" }`）、tools（转换为 Anthropic 格式）、tool_choice（auto/any/none）以及 extra 参数。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。
+构建 Anthropic 请求体。设置 max_tokens、system、thinking 模式（支持 `{ type: "enabled" }`、`{ type: "adaptive" }` 和 `{ type: "disabled" }`）、tools（转换为 Anthropic 格式）、tool_choice（auto/any/none）以及 extra 参数。**仅在 thinking 强制 enabled 时跳过 temperature/top_p**（2026-08-06 实测：`enabled` + temperature/top_p → 400"请求参数组合无效"，符合 Anthropic 协议 extended thinking 须省略 temperature 的规则；`adaptive`/`disabled` 与 temperature/top_p 组合均 200 通过，故保留温度控制）。保留 top_k。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。
 
 #### `processStreamingResponse(responseBody, progress, token): Promise<void>`
 处理 Anthropic SSE 流式响应。逐行解析 `data:` 前缀的 SSE 事件，委托 `processAnthropicChunk()`。注册取消回调：`token.onCancellationRequested` 时调用 `reader.cancel()` 立即中断流式读取。在 `finally` 块中 dispose 该回调，防止多次调用 `processStreamingResponse` 时回调累积。
@@ -1557,7 +1560,7 @@ type 取值：`feat` | `fix` | `refactor` | `docs` | `chore` | `improve` 等。
 
 ### 6.7 VS Code API 使用约束
 
-- `LanguageModelChatProvider` — 必须实现 `provideLanguageModelChatResponse()` 和 `provideLanguageModelChatInformation()`
+- `LanguageModelChatProvider` — 必须实现 `provideLanguageModelChatResponse()` 和 `provideLanguageModelChatInformation()`；可选实现 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+）用于模型列表动态刷新（本项目在 `apiMode` 设置变化时触发）
 - `LanguageModelResponsePart` — 使用 `LanguageModelTextPart`、`LanguageModelThinkingPart`、`LanguageModelToolCallPart`、`LanguageModelDataPart`
 - `LanguageModelChatInformation.maxOutputTokens` — 必须填入模型真实输出上限，不能为 0；VS Code 原生 Token/Context Usage 指示器会在 `maxOutputTokens <= 0` 时隐藏
 - `SecretStorage` — 用于安全存储 API Key

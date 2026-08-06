@@ -24,6 +24,7 @@ node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]
 | Anthropic | 7 | 流式对话（SSE 事件序列） |
 | Anthropic | 8 | 流式工具调用（tool_use） |
 | Anthropic | 9 | thinking 参数（adaptive/disabled） |
+| Anthropic | 9b | temperature/top_p 与 thinking 组合规则（enabled→400 / adaptive / disabled→200，生产 bug 回归 + 规则验证） |
 | Responses | 10 | 非流式对话（output_text + usage） |
 | Responses | 11 | 流式对话（三模型：qwen3.7-max / deepseek-v4-flash-0731 / qwen3.8-max） |
 | Responses | 12 | 流式工具调用（function_call，扁平工具格式） |
@@ -57,7 +58,7 @@ node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]
    - deepseek-v4-flash-0731: `response.reasoning_text.delta`
    - 插件已兼容两种 ✅
 
-4. **Anthropic 协议非全量**：qwen3.7-max、kimi-k2.7-code 不支持（supports_anthropic=false）
+4. **Anthropic 协议非全量且部分模型有 bug**：qwen3.7-max、kimi-k2.7-code 不支持（supports_anthropic=false）；部分模型（如 DeepSeek 系列）在 Anthropic 模式下强制思考 + temperature/top_p → 400"请求参数组合无效"（2026-08-06 实测，插件已修复为仅强制思考时跳过温度）。**建议优先使用 OpenAI 兼容格式**
 
 5. **Responses 端点其他差异**：
    - 拒绝 function_call / function_call_output 内容块 → 需文本化回填 `[tool_call]` / `[tool_result]`

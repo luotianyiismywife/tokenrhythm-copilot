@@ -12,3 +12,10 @@ vsc-extension-quickstart.md
 .eslint*
 **/tsconfig.tsbuildinfo
 scripts/
+test/
+AGENTS.md
+基云律动.md
+eslint.config.mjs
+.copilot/
+*.md.tmp
+out/**/*.map

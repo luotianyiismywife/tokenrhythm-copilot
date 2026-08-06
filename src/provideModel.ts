@@ -277,6 +277,19 @@ export async function prepareLanguageModelChatInformation(
         }
     }
 
+    // ── Filter by apiMode: only list models supported by the selected protocol ──
+    // "auto" / "openai" → all models (every model supports the OpenAI-compatible format)
+    // "anthropic"       → only models with supports_anthropic=true (from /v1/models)
+    // "responses"       → only models with supports_responses=true (from /v1/models)
+    // If the capability set is empty (API probe failed / not fetched yet), keep all
+    // models rather than showing an empty list — the user can retry on next reload.
+    const apiModeSetting = config.get<string>("tokenrhythm.apiMode", "auto");
+    if (apiModeSetting === "anthropic" && _anthropicModelIds.size > 0) {
+        infos = infos.filter((info) => _anthropicModelIds.has(info.id));
+    } else if (apiModeSetting === "responses" && _responsesModelIds.size > 0) {
+        infos = infos.filter((info) => _responsesModelIds.has(info.id));
+    }
+
     logger.info("models.loaded", { count: infos.length, source: "total" });
     return infos;
 }

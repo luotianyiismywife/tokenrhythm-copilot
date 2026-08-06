@@ -253,32 +253,43 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 			rb.system = this._systemContent;
 		}
 
-		// Add temperature
-		if (um?.temperature !== undefined && um.temperature !== null) {
-			if (um.supportsTemperature !== false) {
-				rb.temperature = um.temperature;
-			}
-		}
-
-		// Add top_p if configured
-		if (um?.top_p !== undefined && um.top_p !== null) {
-			rb.top_p = um.top_p;
-		}
-
-		// Add top_k if configured
-		if (um?.top_k !== undefined) {
-			rb.top_k = um.top_k;
-		}
-
-		// Add thinking mode (Anthropic-compatible format)
+		// Add thinking mode (Anthropic-compatible format).
+		// Verified against the TokenRhythm endpoint (2026-08-06, deepseek-v4-flash):
+		//   - thinking: { type: "enabled" }  + temperature/top_p → 400 "请求参数组合无效"
+		//   - thinking: { type: "adaptive" } + temperature/top_p → 200 OK
+		//   - thinking: { type: "disabled" } + temperature      → 200 OK
+		// So temperature/top_p are only skipped when thinking is FORCED enabled,
+		// matching the Anthropic protocol rule (extended thinking requires
+		// temperature to be omitted). adaptive/disabled keep temperature control.
+		let thinkingForcedEnabled = false;
 		if (um?.enable_thinking === true) {
 			if (um?.reasoning_effort === 'adaptive') {
 				rb.thinking = { type: "adaptive" };
 			} else {
 				rb.thinking = { type: "enabled", budget_tokens: 8192 };
+				thinkingForcedEnabled = true;
 			}
 		} else {
 			rb.thinking = { type: "disabled" };
+		}
+
+		// Add temperature (skipped only while thinking is forced enabled)
+		if (!thinkingForcedEnabled) {
+			if (um?.temperature !== undefined && um.temperature !== null) {
+				if (um.supportsTemperature !== false) {
+					rb.temperature = um.temperature;
+				}
+			}
+
+			// Add top_p if configured
+			if (um?.top_p !== undefined && um.top_p !== null) {
+				rb.top_p = um.top_p;
+			}
+		}
+
+		// Add top_k if configured
+		if (um?.top_k !== undefined) {
+			rb.top_k = um.top_k;
 		}
 
 		// Add tools configuration

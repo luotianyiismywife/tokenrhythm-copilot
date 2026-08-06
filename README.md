@@ -80,6 +80,8 @@ The extension ships with built-in definitions for the following TokenRhythm chat
 | `qwen3.8-max`³ | 1M | 131.1K | ✅ | ✅ |
 
 > All models support the OpenAI-compatible protocol. The **Responses API** column shows which models additionally support the Responses protocol (supports_responses=true); most models also support Anthropic (supports_anthropic=true). Protocol capability is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded. In `auto` mode, priority: Responses (if `enableResponsesApi` enabled) > Anthropic (if `enableAnthropicApi` enabled) > OpenAI.
+> [!WARNING]
+> The Anthropic protocol has compatibility issues with some models (e.g. DeepSeek: forced thinking + temperature/top_p returns 400 "请求参数组合无效"). **The OpenAI-compatible format is recommended**; use Anthropic only when you specifically need the native Messages format.
 > ¹ `kimi-k2.7-code` does not support temperature/top_p parameters.
 > ² `qwen3.7-max` does not support the Anthropic protocol (supports_anthropic=false).
 > ³ `qwen3.8-max` (in testing) supports text + image input and the Responses protocol natively.
@@ -126,8 +128,8 @@ Available in `settings.json`:
 | `tokenrhythm.maxInputTokensRatio` | `1.0` | Ratio of the real context window declared as `maxInputTokens` (0.1 - 1.0). VS Code's agent auto-compaction triggers at ~90% of the declared value. **Recommended: 0.8** so compaction fires at ~72% of the real window, preventing context overflow on large-window BYOK models. The `context_length` sent in API requests always uses the real value. |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | Show the advanced token counter in the status bar while using TokenRhythm models. |
 | `tokenrhythm.enableResponsesApi` | `false` | Use the Responses API protocol in `auto` mode for models detected as supports_responses=true at startup (from `GET /v1/models` — dynamic, no hardcoded model IDs). **Disabled by default**: the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, non-standard multi-round tool backfill), so models fall back to the more mature OpenAI-compatible format. Enable only to try the Responses protocol. |
-| `tokenrhythm.enableAnthropicApi` | `false` | Use the Anthropic Messages protocol in `auto` mode for models detected as supports_anthropic=true at startup (dynamic, no hardcoded model IDs). **Disabled by default**. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI. |
-| `tokenrhythm.apiMode` | `auto` | API protocol for requests: `auto` (follow each model's default; models with supports_responses=true use the Responses API automatically), `openai` (force OpenAI format), `anthropic` (force Anthropic format), or `responses` (force Responses API). Applies to both chat and Git commit generation. |
+| `tokenrhythm.enableAnthropicApi` | `false` | Use the Anthropic Messages protocol in `auto` mode for models detected as supports_anthropic=true at startup (dynamic, no hardcoded model IDs). **Disabled by default** — the Anthropic endpoint has compatibility issues with some models (e.g. DeepSeek), the more mature OpenAI-compatible format is recommended. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI. |
+| `tokenrhythm.apiMode` | `auto` | API protocol for requests: `auto` (follow each model's default; models with supports_responses=true use the Responses API automatically), `openai` (force OpenAI format), `anthropic` (force Anthropic format — note some models have compatibility issues, e.g. DeepSeek thinking + temperature → 400; OpenAI is recommended), or `responses` (force Responses API). Applies to both chat and Git commit generation. **Also filters the model picker**: in `anthropic` mode only supports_anthropic=true models are listed, in `responses` mode only supports_responses=true models are listed, `auto`/`openai` list all. Switching this setting updates the picker **live without reloading the window**. |
 
 > [!NOTE]
 > Models with switchable thinking (e.g., DeepSeek, Qwen) provide reasoning effort levels such as `Disabled`/`High`/`Maximum`.
@@ -205,6 +207,8 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `qwen3.8-max`³ | 1M | 131.1K | ✅ | ✅ |
 
 > 所有模型均支持 OpenAI 兼容协议。**Responses API** 列标注哪些模型额外支持 Responses 协议（supports_responses=true）；大多数模型也支持 Anthropic（supports_anthropic=true）。协议能力在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID。auto 模式下优先级：Responses（若开启 `enableResponsesApi`）> Anthropic（若开启 `enableAnthropicApi`）> OpenAI。
+> [!WARNING]
+> Anthropic 协议对部分模型存在兼容性问题（如 DeepSeek：强制思考 + temperature/top_p 返回 400"请求参数组合无效"）。**建议优先使用 OpenAI 兼容格式**；仅在明确需要 Anthropic 原生 Messages 格式时使用。
 > ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
 > ² `qwen3.7-max` 不支持 Anthropic 协议（supports_anthropic=false）。
 > ³ `qwen3.8-max`（测试中）支持文本与图像输入，原生支持 Responses 协议。
@@ -266,8 +270,8 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `tokenrhythm.maxInputTokensRatio` | `1.0` | 每个模型声明为 `maxInputTokens` 的真实上下文窗口比例（0.1 - 1.0）。VS Code 的 agent 自动压缩约在声明的 maxInputTokens 的 90% 处触发。**建议设为 0.8** —— 可使压缩在真实窗口约 72% 处触发，防止 BYOK 大窗口模型上下文溢出。API 请求体中的 context_length 始终使用真实值。 |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | 使用 TokenRhythm 模型时在状态栏显示高级 Token 计数器。 |
 | `tokenrhythm.enableResponsesApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_responses=true 的模型（来自 `GET /v1/models`——动态探测，不硬编码模型 ID）使用 Responses 协议。**默认关闭**：TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认回退到更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。 |
-| `tokenrhythm.enableAnthropicApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_anthropic=true 的模型（动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭**。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。 |
-| `tokenrhythm.apiMode` | `auto` | 请求使用的 API 协议：`auto`（跟随各模型默认格式；supports_responses=true 的模型自动使用 Responses API）、`openai`（强制 OpenAI 格式）、`anthropic`（强制 Anthropic 格式）、`responses`（强制 Responses API 格式）。对聊天请求和 Git 提交消息生成均生效。 |
+| `tokenrhythm.enableAnthropicApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_anthropic=true 的模型（动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭** —— Anthropic 端点对部分模型存在兼容性问题（如 DeepSeek），建议使用更成熟的 OpenAI 兼容格式。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。 |
+| `tokenrhythm.apiMode` | `auto` | 请求使用的 API 协议：`auto`（跟随各模型默认格式；supports_responses=true 的模型自动使用 Responses API）、`openai`（强制 OpenAI 格式）、`anthropic`（强制 Anthropic 格式——注意部分模型存在兼容性问题，如 DeepSeek 强制思考 + temperature → 400，建议使用 OpenAI）、`responses`（强制 Responses API 格式）。对聊天请求和 Git 提交消息生成均生效。**同时过滤模型选择器**：`anthropic` 模式仅列出 supports_anthropic=true 的模型，`responses` 模式仅列出 supports_responses=true 的模型，`auto`/`openai` 列出全部。切换该设置后模型选择器**即时刷新，无需 reload 窗口**。 |
 
 > [!NOTE]
 > 支持切换思考模式的模型（如 DeepSeek、Qwen）提供`禁用思考`/`高`/`极高`等推理强度选项。

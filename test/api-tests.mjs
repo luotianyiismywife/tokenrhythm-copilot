@@ -182,6 +182,23 @@ async function testAnthropic() {
         const r2 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "disabled" } }, ANTH);
         check("thinking=disabled", r2.ok, `s=${r2.status} ${r2.raw}`);
     }
+
+    console.log("--- 9b. temperature/top_p 与 thinking 组合（2026-08-06 生产 400 复现 + 规则验证） ---");
+    {
+        // 实测规则（deepseek-v4-flash，2026-08-06）：
+        //   enabled + temp/top_p → 400 "请求参数组合无效"（生产 bug 根因，Anthropic 协议要求 extended thinking 时省略 temperature）
+        //   adaptive + temp/top_p → 200 OK
+        //   disabled + temp → 200 OK
+        // 插件 `AnthropicApi.prepareRequestBody` 仅在 thinking 强制 enabled 时跳过 temperature/top_p。
+        const r1 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "enabled" }, temperature: 0 }, ANTH);
+        check("enabled+temp → 400 组合无效", !r1.ok && r1.status === 400, `s=${r1.status} ${r1.raw}`);
+        const r1b = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "enabled" }, top_p: 1 }, ANTH);
+        check("enabled+top_p → 400 组合无效", !r1b.ok && r1b.status === 400, `s=${r1b.status} ${r1b.raw}`);
+        const r2 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "adaptive" }, temperature: 0, top_p: 1 }, ANTH);
+        check("adaptive+temp+top_p → 200 通过", r2.ok, `s=${r2.status} ${r2.raw}`);
+        const r3 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "disabled" }, temperature: 0 }, ANTH);
+        check("disabled+temp → 200 通过", r3.ok, `s=${r3.status} ${r3.raw}`);
+    }
 }
 
 async function testResponses() {

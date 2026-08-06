@@ -29,6 +29,18 @@ export function activate(context: vscode.ExtensionContext) {
     // Register the TokenRhythm provider under the vendor id used in package.json
     vscode.lm.registerLanguageModelChatProvider("tokenrhythm", provider);
 
+    // Refresh the model list dynamically when the API mode (or auto model
+    // discovery) setting changes — the provider fires
+    // onDidChangeLanguageModelChatInformation so VS Code re-invokes
+    // provideLanguageModelChatInformation and updates the picker without reload.
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration("tokenrhythm.apiMode") || e.affectsConfiguration("tokenrhythm.enableAutoModelDiscovery")) {
+                provider.notifyModelListChanged();
+            }
+        })
+    );
+
     // Management command to configure API key
     context.subscriptions.push(
         vscode.commands.registerCommand("tokenrhythm.setApiKey", async () => {

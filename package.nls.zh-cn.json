@@ -51,10 +51,10 @@
 	"config.apiMode.desc": "聊天请求使用的 API 协议。平台支持 OpenAI 兼容格式、Anthropic 格式和 Responses API 格式。默认: auto（跟随各模型默认格式；auto 模式下 supports_responses=true 的模型仅在开启 enableResponsesApi 时使用 Responses 协议，否则回退 OpenAI）。",
 	"config.apiMode.enum.auto.desc": "自动 — 使用各模型默认的 API 格式。支持 Responses API 的模型（supports_responses=true）仅在开启 enableResponsesApi 设置时使用该协议；否则使用 OpenAI 兼容格式。",
 	"config.apiMode.enum.openai.desc": "OpenAI — 使用 OpenAI 兼容格式（POST /chat/completions）。",
-	"config.apiMode.enum.anthropic.desc": "Anthropic — 使用 Anthropic 格式（POST /v1/messages）。",
+	"config.apiMode.enum.anthropic.desc": "Anthropic — 使用 Anthropic 格式（POST /v1/messages）。注意：部分模型在 Anthropic 格式下存在兼容性问题（如 DeepSeek 强制思考 + temperature 返回 400），建议使用 OpenAI 格式。",
 	"config.apiMode.enum.responses.desc": "Responses — 使用 OpenAI Responses API 格式（POST /v1/responses）。仅 supports_responses=true 的模型支持该协议。",
 	"config.enableResponsesApi.desc": "当 apiMode 为 auto 时，为支持 Responses API 的模型（supports_responses=true，如 qwen3.7-max、deepseek-v4-flash-0731）使用 Responses 协议。**默认关闭** —— TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。",
-	"config.enableAnthropicApi.desc": "当 apiMode 为 auto 时，为启动时探测到 supports_anthropic=true 的模型（来自 /v1/models——动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭**；开启前模型默认使用 OpenAI 兼容格式。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。",
+	"config.enableAnthropicApi.desc": "当 apiMode 为 auto 时，为启动时探测到 supports_anthropic=true 的模型（来自 /v1/models——动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭** —— Anthropic 端点对部分模型存在兼容性问题（如 DeepSeek 强制思考 + temperature 返回 400），建议使用更成熟的 OpenAI 兼容格式。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。",
 
 	"command.setModelPreset": "设置模型温度预设",
 

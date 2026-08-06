@@ -86,6 +86,29 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
     private _lastRequestTime: number | null = null;
 
     /**
+     * Emitter for the optional `onDidChangeLanguageModelChatInformation` event.
+     * Fired when the API mode setting changes so VS Code re-invokes
+     * `provideLanguageModelChatInformation` and refreshes the model picker
+     * without requiring a window reload.
+     */
+    private readonly _onDidChangeLanguageModelChatInformation = new vscode.EventEmitter<void>();
+
+    /**
+     * An optional event fired when the available set of language models changes.
+     * Lets VS Code re-query the model list when `tokenrhythm.apiMode` changes,
+     * so the picker only shows models supported by the selected protocol.
+     */
+    readonly onDidChangeLanguageModelChatInformation = this._onDidChangeLanguageModelChatInformation.event;
+
+    /**
+     * Notify VS Code that the model list may have changed (e.g. apiMode setting
+     * was switched). VS Code re-invokes provideLanguageModelChatInformation.
+     */
+    notifyModelListChanged(): void {
+        this._onDidChangeLanguageModelChatInformation.fire();
+    }
+
+    /**
      * Create a provider using the given secret storage for the API key.
      */
     constructor(
