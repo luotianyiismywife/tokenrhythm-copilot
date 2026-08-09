@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.6.0",
+	"version": "1.6.1",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -80,6 +80,11 @@
 				"command": "tokenrhythm.manageApiKeys",
 				"category": "%commandCategory%",
 				"title": "%command.manageApiKeys%"
+			},
+			{
+				"command": "tokenrhythm.setVisionProxyModel",
+				"category": "%commandCategory%",
+				"title": "%command.setVisionProxyModel%"
 			}
 		],
 		"walkthroughs": [

@@ -1,5 +1,12 @@
 # 更新日志（Changelog）
 
+## v1.6.1 (2026-08-09)
+
+### 视觉代理模型动态选择
+
+- **`TokenRhythm: 选择视觉代理模型` 命令**：新增命令面板命令，从 `/v1/models` 动态加载 `supports_vision=true` 的视觉模型列表（实测含 `kimi-k2.5` / `kimi-k2.6` / `kimi-k2.7-code` / `qwen3.8-max` / `seed-2.1-turbo` / `seed-2.1-pro`），通过 QuickPick 下拉选择代替手填模型 ID。当前使用的模型带 ✓ 标记，列表末尾保留"自定义（手动输入）"兜底；API 不可用时自动回退为仅手填。
+- **适用范围文档说明**：README 补充视觉代理边界说明——`ask_image` 代理作用于用户手动粘贴的图片，不覆盖 VS Code 内置截图工具（后者由 Copilot Chat 框架内部视觉模型处理，第三方无法接管）。
+
 ## v1.6.0 (2026-08-09)
 
 ### 多 API Key 轮询与余额自动切换
