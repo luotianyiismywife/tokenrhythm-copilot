@@ -56,7 +56,21 @@
 	"config.enableResponsesApi.desc": "当 apiMode 为 auto 时，为支持 Responses API 的模型（supports_responses=true，如 qwen3.7-max、deepseek-v4-flash-0731）使用 Responses 协议。**默认关闭** —— TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。",
 	"config.enableAnthropicApi.desc": "当 apiMode 为 auto 时，为启动时探测到 supports_anthropic=true 的模型（来自 /v1/models——动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭** —— Anthropic 端点对部分模型存在兼容性问题（如 DeepSeek 强制思考 + temperature 返回 400），建议使用更成熟的 OpenAI 兼容格式。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。",
 
+	"config.apiKeyMode.desc": "API Key 使用模式：rotation（在所有 key 间轮询，自动跳过不可用的）或 single（仅使用当前 key）。",
+	"config.apiKeyMode.enum.rotation.desc": "在所有 API Key 间轮询，自动跳过不可用的 key。",
+	"config.apiKeyMode.enum.single.desc": "仅使用当前选中的 API Key。",
+	"config.singleKeyFallback.desc": "single 模式下当前 key 不可用时的行为：error（直接报错不切换）或 switch（自动切换到下一个可用 key 并弹窗提示）。",
+	"config.singleKeyFallback.enum.error.desc": "直接报错，不切换到其他 key。",
+	"config.singleKeyFallback.enum.switch.desc": "自动切换到下一个可用 key，并在右下角弹窗提示。",
+	"config.apiKeyRotationStatusCodes.desc": "触发 API Key 自动轮换的 HTTP 状态码（匹配错误消息中的 [code] 或 status code）。默认 [401, 402, 429, 503]——Key 无效、余额不足、限流、服务端繁忙均自动切换到下一个 key。",
+	"config.apiKeyRotationErrorPatterns.desc": "触发 API Key 自动轮换的错误文本模式（不区分大小写匹配）。",
+	"config.apiKeyExhaustedCooldownMin.desc": "瞬态失效 key（如 429 限流）在可被再次使用前的冷却时长（分钟）。0 = 立即恢复可用。",
+	"config.balanceCheckEnabled.desc": "启用主动余额预检：通过各 key 绑定的 tr_session cookie 查询余额，可用余额低于 minBalanceCny 时自动跳过该 key。cookie 缺失或查询失败时回退到被动检测（402/401/429）。",
+	"config.minBalanceCny.desc": "余额阈值（元）：可用余额 ≤ 该值时判定该 key 余额耗尽并跳过。可设为正值以在余额耗尽前提前切换。",
+	"config.balanceCheckIntervalSec.desc": "余额查询缓存 TTL（秒）。同一 cookie 的余额在该时长内缓存，避免频繁请求用户中心 API。0 = 每次请求都查询。",
+
 	"command.setModelPreset": "设置模型温度预设",
+	"command.manageApiKeys": "管理 API Keys",
 
 	"walkthrough.title": "TokenRhythm for Copilot Chat",
 	"walkthrough.description": "在 Copilot Chat 中配置 TokenRhythm 模型。",

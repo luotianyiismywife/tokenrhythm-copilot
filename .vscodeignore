@@ -17,5 +17,6 @@ AGENTS.md
 基云律动.md
 eslint.config.mjs
 .copilot/
+docs/
 *.md.tmp
 out/**/*.map

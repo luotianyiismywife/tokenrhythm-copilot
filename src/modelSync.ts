@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { getApiModelIds, isApiFetchSuccessful } from "./apiModelList";
 import { ensureModelsDevLoaded } from "./modelsDev";
 import { getBuiltInModelIds } from "./models";
+import { getPrimaryApiKey } from "./keyManager";
 import { logger } from "./logger";
 
 /**
@@ -94,9 +95,10 @@ export async function syncModelsOnStartup(context: vscode.ExtensionContext): Pro
             return;
         }
 
-        // Need an API key to query /v1/models.
-        const apiKey = await context.secrets.get("tokenrhythm.apiKey");
-        if (!apiKey) {
+        // Need an API key to query /v1/models. Use the primary key
+        // (any valid key works — /v1/models does not check balance).
+        const primaryKey = await getPrimaryApiKey(context.secrets);
+        if (!primaryKey) {
             await appendSyncEvent(context, "⏭️ 跳过", "未配置 API Key");
             return;
         }
@@ -106,7 +108,7 @@ export async function syncModelsOnStartup(context: vscode.ExtensionContext): Pro
         await ensureModelsDevLoaded();
 
         // Fetch the live model list from the API.
-        const apiIds = await getApiModelIds(apiKey);
+        const apiIds = await getApiModelIds(primaryKey.value);
         if (!isApiFetchSuccessful() || apiIds.size === 0) {
             await appendSyncEvent(context, "❌ 失败", "API 不可用或返回空列表");
             return;

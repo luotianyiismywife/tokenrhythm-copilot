@@ -27,6 +27,7 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `tokenrhythm.apiKeys`），两种模式：`rotation`（默认，轮询使用、跳过不可用 key）/ `single`（仅用当前 key；不可用时按 `tokenrhythm.singleKeyFallback` 设置报错或自动切换并弹窗提示）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`tokenrhythm.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因，并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）。旧版单 key `tokenrhythm.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
 | **多模型支持** | 内置 14 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `tokenrhythm.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步事件追加记录到工作区 `.copilot/model-sync-log.md`（无工作区时回退到扩展全局存储目录），事件含时间/结果/发现的新模型列表。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
@@ -184,7 +185,8 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │
   ├── 6. 应用请求延迟 (delay)
   │
-  ├── 7. 确保 API Key 存在
+  ├── 7. 确保至少一个 API Key 存在（ensureApiKey → keyManager.getApiKeyStore）
+  │       └── 无 key 时弹输入框引导添加第一个
   │
   ├── 8. 创建请求超时 AbortController
   │      └── 连接 VS Code 取消令牌 → abort()
@@ -196,7 +198,24 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │      └── 调用 `reader.cancel()` 立即中断流，使 `reader.read()` 返回 `{ done: true }`
   │
   │
-  ├── 10. 根据 apiMode 路由:
+  ├── 9c. **多 Key 轮换循环**（外层 while(true)，每轮选一个 key，`failedKeys` 跟踪各 key 失败原因）:
+  │       ├── pickNextApiKey(secrets, apiKeyMode)
+  │       │   ├── rotation → 从轮询游标环形扫描第一个可用 key，游标前移
+  │       │   ├── single → active key；不可用且 singleKeyFallback=switch → 降级 rotation + 弹窗提示
+  │       │   └── 全部不可用 → 报错 "所有 API Key 均不可用"
+  │       ├── 主动余额预检（balanceCheckEnabled 且有 cookie）:
+  │       │   ├── isKeyBalanceSufficient(cookie) → 按 cookie 粒度查 /api/usage-summary（TTL 缓存）
+  │       │   ├── 余额 ≤ minBalanceCny → markApiKeyExhausted(balance) + continue 换下一个 key
+  │       │   └── 曾标记不可用但余额恢复 → markApiKeyAvailable（自愈）
+  │       ├── 用当前 key 构造 requestHeaders → _executeApiRequest()（见步骤 10 协议分发）
+  │       ├── 成功 → break 循环；曾不可用 → 自愈置可用
+  │       └── 失败: isKeyRotationError(err)（状态码 [401]/[402]/[429]/[503] 或文本 patterns 可配置）
+  │           ├── getKeyRotationReason(err) → 402/401 → markApiKeyExhausted(持久化 available=false) + continue 换 key
+  │           ├── 429/503 → markApiKeyExhausted(仅内存冷却，不持久化) + continue 换 key
+  │           ├── 取消/超时/其他错误（400/403/500/网络/IMAGE_SENSITIVE）→ 抛给外层 catch，不轮换
+  │           └── failedKeys.size >= keys.length → 报错：列出脱敏 key+原因；含瞬态(429/503)提示"请稍后重试"，否则提示"用管理命令检测"
+  │
+  ├── 10. 根据 apiMode 路由（_executeApiRequest）:
   │
   │     ├── OpenAI 模式:
   │     │   ├── OpenaiApi.convertMessages()    ← 消息格式转换
@@ -371,9 +390,12 @@ generateCommitMsg(secrets, scm?)
   │   ├── 语言检测: auto 模式时告知模型匹配历史 commit 语言风格
   │   ├── 用户当前输入 (SCM InputBox)
   │   └── Git Diff 内容
-  ├── 调用 API:
+  ├── 调用 API（多 key 轮换循环）:
+  │   ├── ensureApiKeyEntry → pickNextApiKey (rotation/single + fallback)
+  │   ├── 余额预检（cookie）
   │   ├── OpenaiApi.createMessage() / AnthropicApi.createMessage() / ResponsesApi.createMessage()
-  │   └── 流式输出到 SCM InputBox
+  │   ├── 流式输出到 SCM InputBox
+  │   └── 轮换错误 → 换 key 重试（已有部分输出则不换）；用户取消 → 中止
   └── 清理: 移除 ``` 标记和 <think> 标签
 ```
 
@@ -386,15 +408,17 @@ generateCommitMsg(secrets, scm?)
 ```
 src/
 ├── apiModelList.ts                       # API 模型列表获取
+├── balanceCheck.ts                       # 余额查询（cookie /api/usage-summary，TTL 缓存，手动检测）
 ├── commonApi.ts                          # API 抽象基类
-├── extension.ts                          # 扩展入口 (activate/deactivate)
+├── extension.ts                          # 扩展入口 (activate/deactivate)，含 manageApiKeys QuickPick 管理
+├── keyManager.ts                         # 多 API Key 管理（存储/迁移/轮询选择/失效状态/轮换判定/脱敏）
 ├── localize.ts                           # 国际化/本地化
 ├── logger.ts                             # 日志系统
 ├── models.ts                             # 内置模型定义清单
 ├── modelsDev.ts                          # models.dev 元数据拉取与查询
 ├── modelSync.ts                          # 启动模型同步（每日一次，记录到 .copilot/model-sync-log.md）
 ├── provideModel.ts                       # 模型信息提供函数（含自动发现）
-├── provider.ts                           # Chat 模型提供商 (核心主文件)
+├── provider.ts                           # Chat 模型提供商 (核心主文件，含多 key 轮换循环)
 ├── provideToken.ts                       # Token 计数函数
 ├── statusBar.ts                          # 状态栏管理
 ├── types.ts                              # TypeScript 类型定义
@@ -452,8 +476,10 @@ test/
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `extension.ts` | ~210 | 扩展激活/停用，注册 Provider 和 6 条命令，首次安装欢迎页引导 |
-| `provider.ts` | ~950 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由）及图片代理多轮循环处理 |
+| `extension.ts` | ~460 | 扩展激活/停用，注册 Provider 和 7 条命令，`manageApiKeys` QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性），首次安装欢迎页引导 |
+| `provider.ts` | ~1290 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由、多 key 轮换循环、余额预检、被动切换）及图片代理多轮循环处理 |
+| `keyManager.ts` | ~330 | 多 API Key 管理：SecretStorage 存取与旧 key 迁移、rotation/single 选择逻辑、可用性状态（持久化 available + 瞬态冷却）、轮换错误判定、脱敏 |
+| `balanceCheck.ts` | ~180 | 余额查询：cookie 认证 `GET /api/usage-summary`、TTL 缓存、`isKeyBalanceSufficient` 预检、`testKeyAvailability` 手动检测（查余额 + 最小聊天请求） |
 | `models.ts` | ~230 | 14 个内置模型定义，模型配置查询（所有模型声明 `imageInput: true`） |
 | `types.ts` | ~95 | `TokenRhythmModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
 | `apiModelList.ts` | ~120 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
@@ -493,7 +519,10 @@ test/
 ### 4.1 `src/extension.ts`
 
 #### `activate(context: vscode.ExtensionContext): void`
-扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册六条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设）；首次安装时调用 `showWelcomeIfNeeded()` 显示欢迎页引导。
+扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册七条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设、管理 API Keys）；首次安装时调用 `showWelcomeIfNeeded()` 显示欢迎页引导。
+
+#### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
+多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态标记），支持动作：添加 Key（可附 label/cookie）、删除 Key（二次确认）、设为当前使用、重置失效状态（清冷却 + available=false → null）、检测可用性（`testKeyAvailability`，通过/失败更新状态）、绑定或更新 Cookie、清除 Cookie。
 
 #### `showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void>`
 检查是否已显示过欢迎页（通过 `globalState` 的 `WELCOME_SHOWN_KEY` 标记）。如果已标记或已有 API Key，直接返回；否则通过 `workbench.action.openWalkthrough` 命令打开 Walkthrough 页面并标记为已显示。静默处理异常，不阻塞扩展激活。
@@ -528,10 +557,13 @@ test/
 计算文本或消息的 Token 数量。委托给 `countMessageTokens()`。
 
 #### `provideLanguageModelChatResponse(model, messages, options, progress, token): Promise<void>`
-核心方法：处理聊天请求，流式返回响应。包括模型配置获取（内置模型 → 自动发现回退）、API Key 验证、推理力度应用、temperature/top_p 注入（模型预设或自定义设置）、API 模式确定（`tokenrhythm.apiMode` 设置：`auto` 跟随模型默认或强制 `openai`/`anthropic`/`responses`；`tokenrhythm.enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai）、延迟控制、超时管理、API 路由、流式解析、图片代理拦截处理和错误处理。错误处理区分三种情况：用户取消（直接重新抛出原始错误）、超时（友好超时提示）、连接被终止（友好终止提示）。
+核心方法：处理聊天请求，流式返回响应。包括模型配置获取（内置模型 → 自动发现回退）、API Key 验证（多 key 轮换循环）、推理力度应用、temperature/top_p 注入（模型预设或自定义设置）、API 模式确定（`tokenrhythm.apiMode` 设置：`auto` 跟随模型默认或强制 `openai`/`anthropic`/`responses`；`tokenrhythm.enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai）、延迟控制、超时管理、**多 key 轮换循环**（`pickNextApiKey` → 余额预检 → `_executeApiRequest` → 成功 break / 轮换错误换 key / 其他错误抛出）、流式解析、图片代理拦截处理和错误处理。错误处理区分三种情况：用户取消（直接重新抛出原始错误）、超时（友好超时提示）、连接被终止（友好终止提示）。
+
+#### `private async _executeApiRequest(params): Promise<void>`
+执行单个 key 的完整 API 请求：三协议分发（openai/anthropic/responses，原 provideLanguageModelChatResponse 内的协议分支）、流式处理、`_handleInterceptedToolCall` 图片代理第二轮。在轮换循环内每轮调用一次。参数含 `apiKey`（当前选中的 key 值）、`requestHeaders`、`trackingProgress`、`onUsage`（用量回调）等。错误抛出给轮换循环调用方决定是否换 key。
 
 #### `private async _handleInterceptedToolCall(params): Promise<void>`
-处理图片代理拦截。循环处理最多 `tokenrhythm.visionMaxRounds` 轮（默认 5）。每轮检测 API 实例的 `interceptedToolCall`，发出 thinking 块显示“正在根据图片提问：[问题]”，关闭 thinking 块后视觉模型输出以普通文本流式显示。单图调用 `callVisionModel()`，多图调用 `callVisionModelMulti()`，构建本轮 API 请求（追加 assistant tool_call + tool result），注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 图时）供模型继续使用，保留 temperature/reasoning_effort 等原始参数，DeepSeek 兼容注入 `reasoning_content`。模型不再调用 ask_image/ask_with_multi_image 时退出循环。
+处理图片代理拦截。循环处理最多 `tokenrhythm.visionMaxRounds` 轮（默认 5）。每轮检测 API 实例的 `interceptedToolCall`，发出 thinking 块显示“正在根据图片提问：[问题]”，关闭 thinking 块后视觉模型输出以普通文本流式显示。单图调用 `callVisionModel()`，多图调用 `callVisionModelMulti()`，构建本轮 API 请求（追加 assistant tool_call + tool result），注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 图时）供模型继续使用，保留 temperature/reasoning_effort 等原始参数，DeepSeek 兼容注入 `reasoning_content`。模型不再调用 ask_image/ask_with_multi_image 时退出循环。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），直接报错由用户重试整个请求。
 
 - 视觉模型调用期间用户取消则跳过本轮。
 - 每轮创建独立 AbortController，带独立超时。
@@ -542,8 +574,8 @@ test/
 - 使用 `_resetStreamState()` 重置流状态，避免 `_completedToolCallIndices` 等状态在轮次间残留导致工具调用被跳过。
 - `thinking` 字段值统一使用字符串（`"enabled"` / `"disabled"`），与 `prepareRequestBody` 保持一致。
 
-#### `private async ensureApiKey(): Promise<string | undefined>`
-确保 API Key 存在于 SecretStorage 中，缺失时弹出输入框提示用户输入。
+#### `private async ensureApiKey(): Promise<ApiKeyEntry | undefined>`
+确保至少一个 API Key 存在（经 keyManager.getApiKeyStore）。无任何 key 时弹出输入框引导添加第一个（写入多 key 存储）。轮换循环在请求前调用，为空时抛出"TokenRhythm API key not found"。
 
 ---
 
@@ -712,7 +744,126 @@ API 实现的抽象基类。
 
 ---
 
-### 4.6 `src/apiModelList.ts`
+### 4.6 `src/keyManager.ts`
+
+#### `interface ApiKeyEntry`
+`{ value: string; label?: string; cookie?: string; available?: boolean | null; lastCheckedAt?: number }` — 单个 API Key 条目。`cookie` 为可选的 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询）；`available` 为可用性状态（true=可用 / false=不可用 / null=未检测，持久化于 SecretStorage）。
+
+#### `interface ApiKeyStore`
+`{ keys: ApiKeyEntry[]; activeIndex: number }` — 完整 store（`tokenrhythm.apiKeys` 的 JSON 结构）。
+
+#### `type ApiKeyMode = "rotation" | "single"`
+key 使用模式：轮询 / 单 key。
+
+#### `type SingleKeyFallback = "error" | "switch"`
+single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗提示。
+
+#### `getApiKeyMode(): ApiKeyMode`
+读取 `tokenrhythm.apiKeyMode`（默认 `rotation`；非法值回退）。
+
+#### `getSingleKeyFallback(): SingleKeyFallback`
+读取 `tokenrhythm.singleKeyFallback`（默认 `error`）。
+
+#### `getRotationStatusCodes(): number[]`
+读取触发轮换的状态码列表（默认 `[401, 402, 429, 503]`）。
+
+#### `getRotationErrorPatterns(): string[]`
+读取触发轮换的错误文本 patterns（默认含"余额不足"/`INSUFFICIENT_BALANCE`/`RATE_LIMITED` 等）。
+
+#### `getExhaustedCooldownMin(): number`
+读取 429 瞬态冷却时长（分钟，默认 10）。
+
+#### `getApiKeyStore(secrets): Promise<ApiKeyStore>`
+读取并缓存 store；自动迁移旧版单 key（`tokenrhythm.apiKey`）为单元素列表；JSON 损坏时回退修复。
+
+#### `saveApiKeyStore(secrets, store): Promise<void>`
+写新格式到 SecretStorage；成功后删除旧版单 key（幂等）。
+
+#### `invalidateApiKeyStoreCache(): void`
+使内存缓存失效。
+
+#### `maskApiKey(key): string`
+脱敏 API Key：`sk_****abcd`。
+
+#### `maskCookie(cookie): string`
+脱敏 cookie：`sess_****abcd`。
+
+#### `getTransientExhaustedInfo(keyValue): { reason; remainingSec } | undefined`
+查询是否处于 429 瞬态冷却中；冷却到期自动清除。
+
+#### `isApiKeyEligible(entry): boolean`
+判断 entry 是否可被选中（非持久化不可用、非冷却中）。
+
+#### `isKeyRotationError(err): boolean`
+判定错误是否应触发 key 轮换：状态码 `[code]`/`status code` 匹配配置列表，或错误文本包含任一 patterns（不区分大小写）。
+
+#### `isTransientExhaustedReason(reason): boolean`
+判断失效原因是否为瞬态类（`rate_limited`/`server_error`）。
+
+#### `getKeyRotationReason(err): string`
+从轮换错误中提取失效原因（基于状态码+文本，比 patterns 精确）：402/`INSUFFICIENT_BALANCE`/"余额不足" → `balance`；401 → `invalid`；429/`RATE_LIMITED` → `rate_limited`；503 → `server_error`；其他 → `api_error`。
+
+#### `getPrimaryApiKey(secrets): Promise<ApiKeyEntry | undefined>`
+获取主 key（模型列表/启动同步等"任意有效 key 即可"场景）：single→active；rotation→第一个可用。
+
+#### `pickNextApiKey(secrets, mode): Promise<ApiKeyEntry | undefined>`
+选择下一个要使用的 key：rotation 从游标环形扫描第一个可用 key 并前移游标；single 返回 active key（不可用返回 undefined，由调用方按 fallback 处理）。
+
+#### `markApiKeyExhausted(secrets, keyValue, reason): Promise<void>`
+标记 key 不可用。**瞬态原因**（`rate_limited`/`server_error`）→ 仅记录内存冷却（不持久化，冷却到期自动恢复）；**确定性原因**（`balance`/`invalid`/`api_error`）→ 持久化 `available=false`。
+
+#### `markApiKeyAvailable(secrets, keyValue): Promise<void>`
+标记 key 可用（自愈/手动检测通过），清瞬态冷却。
+
+#### `updateKeyAvailability(secrets, keyValue, available): Promise<void>`
+通用可用性更新。
+
+#### `resetExhaustedKeys(secrets, resetPersisted): Promise<void>`
+清空瞬态冷却；可选将所有持久化不可用标记重置为 null。
+
+#### `addApiKey(secrets, entry): Promise<boolean>`
+添加 key（校验重复值）；返回是否添加成功。
+
+#### `removeApiKey(secrets, index): Promise<void>`
+删除 key；自动修正 activeIndex 与轮询游标。
+
+#### `setActiveKey(secrets, index): Promise<void>`
+设置 single 模式的当前 key。
+
+#### `setKeyCookie(secrets, index, cookie?): Promise<void>`
+绑定/更新/清除指定 key 的 cookie。
+
+#### `getKeyDisplayStatus(entry): "available" | "unavailable" | "unknown" | "cooldown"`
+获取 key 的展示状态（供 QuickPick UI）。
+
+---
+
+### 4.7 `src/balanceCheck.ts`
+
+#### `getBalanceCheckEnabled(): boolean`
+读取 `tokenrhythm.balanceCheckEnabled`（默认 true）。
+
+#### `getMinBalanceCny(): number`
+读取 `tokenrhythm.minBalanceCny`（默认 0，夹取 ≥ 0）。
+
+#### `getBalanceCheckIntervalSec(): number`
+读取余额查询缓存 TTL（秒，默认 60）。
+
+#### `queryAccountBalance(cookie): Promise<number>`
+`GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回 `availableBalanceCny`；401 抛"cookie 失效"。
+
+#### `getBalanceCached(cookie, ttlSec): Promise<number | undefined>`
+带 TTL 缓存的余额查询（按 cookie 粒度）；查询失败返回 undefined（不抛错）。
+
+#### `isKeyBalanceSufficient(cookie): Promise<boolean>`
+判断余额是否充足（> minBalanceCny）；查询失败返回 true（不阻塞请求，回退被动检测）。
+
+#### `testKeyAvailability(entry, baseUrl?): Promise<{ ok: boolean | null; reason?: "balance" | "invalid" | "network" }>`
+手动检测可用性：有 cookie 先查余额（≤ 阈值 → `{ok:false, reason:"balance"}`）→ 发最小真实聊天请求（`say ok` + `max_tokens=8`）：200 → `{ok:true}`，402/`INSUFFICIENT_BALANCE` → `{ok:false, reason:"balance"}`，401 → `{ok:false, reason:"invalid"}`，网络/超时/其他 → `{ok:null}`（无法确定）。
+
+---
+
+### 4.8 `src/apiModelList.ts`
 
 #### `interface ApiModelMetadata`
 `{ id, supports_responses?, supports_anthropic?, supports_vision?, supports_reasoning?, supports_tools?, context_length?, max_completion_tokens? }` — `/v1/models` 返回的扩展模型元数据（能力标记子集）。
@@ -750,7 +901,7 @@ API 实现的抽象基类。
 启动模型同步入口（fire-and-forget，不阻塞扩展激活）。流程：
 1. 读取 `tokenrhythm.syncModelsOnStartup` 配置（默认开启），关闭则直接返回。
 2. 检查 `globalState` 的 `tokenrhythm.lastModelSyncDate`（上次成功同步日期），若等于今天（本地时间 `YYYY-MM-DD`）则跳过。
-3. 从 `SecretStorage` 获取 API Key；缺失时记录 `⏭️ 跳过` 事件并返回（不标记已同步，下次打开重试）。
+3. 用 `getPrimaryApiKey()` 获取主 key（任意有效 key 即可——`/v1/models` 实测不校验余额，余额 < 0 也 200）；缺失时记录 `⏭️ 跳过` 事件并返回（不标记已同步，下次打开重试）。
 4. `ensureModelsDevLoaded()` 预热 models.dev 元数据缓存（1 小时 TTL）。
 5. `getApiModelIds()` 拉取 API 模型列表；`isApiFetchSuccessful()` 为 false 或列表为空时记录 `❌ 失败` 事件并返回（不标记已同步）。
 6. 用 `getBuiltInModelIds()` 对比，找出不在内置列表中的新模型。
@@ -767,7 +918,7 @@ API 实现的抽象基类。
 ### 4.10 `src/provideModel.ts`
 
 #### `prepareLanguageModelChatInformation(options, _token, _secrets): Promise<LanguageModelChatInformation[]>`
-获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。**末尾按 `tokenrhythm.apiMode` 过滤**：`anthropic` 仅保留 `supports_anthropic=true` 的模型，`responses` 仅保留 `supports_responses=true` 的模型（能力集合为空时回退全部）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
+获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `tokenrhythm.enableAutoModelDiscovery` 开启时（默认），用 `getPrimaryApiKey()` 获取主 key（任意有效 key 即可——`/v1/models` 不校验余额），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。**末尾按 `tokenrhythm.apiMode` 过滤**：`anthropic` 仅保留 `supports_anthropic=true` 的模型，`responses` 仅保留 `supports_responses=true` 的模型（能力集合为空时回退全部）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
 
 #### `getResponsesModelIds(): Set<string>`
 同步返回当前探测到的 supports_responses=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Responses 协议。
@@ -1254,11 +1405,11 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 #### `generateCommitMsgForRepository(secrets, repository): Promise<void>`
 为单个仓库生成提交消息。显示进度条，支持取消。
 
-#### `ensureApiKey(secrets): Promise<string | undefined>`
-确保 API Key 存在。
+#### `ensureApiKeyEntry(secrets): Promise<ApiKeyEntry | undefined>`
+确保 API Key 存在（经 keyManager.getApiKeyStore）；无任何 key 时弹输入框引导添加第一个。
 
 #### `performCommitMsgGeneration(secrets, gitDiff, inputBox, repoPath?): Promise<void>`
-核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。
+核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → 余额预检（cookie）→ `createMessage` 流式消费；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容）；用户取消立即中止。
 
 #### `abortCommitGeneration(): void`
 中止提交消息生成。

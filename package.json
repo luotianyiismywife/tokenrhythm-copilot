@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.5.0",
+	"version": "1.6.0",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -75,6 +75,11 @@
 				"command": "tokenrhythm.setModelPreset",
 				"category": "%commandCategory%",
 				"title": "%command.setModelPreset%"
+			},
+			{
+				"command": "tokenrhythm.manageApiKeys",
+				"category": "%commandCategory%",
+				"title": "%command.manageApiKeys%"
 			}
 		],
 		"walkthroughs": [
@@ -337,6 +342,65 @@
 					"type": "boolean",
 					"default": false,
 					"description": "%config.enableAnthropicApi.desc%"
+				},
+				"tokenrhythm.apiKeyMode": {
+					"type": "string",
+					"enum": ["rotation", "single"],
+					"default": "rotation",
+					"enumDescriptions": [
+						"%config.apiKeyMode.enum.rotation.desc%",
+						"%config.apiKeyMode.enum.single.desc%"
+					],
+					"description": "%config.apiKeyMode.desc%"
+				},
+				"tokenrhythm.singleKeyFallback": {
+					"type": "string",
+					"enum": ["error", "switch"],
+					"default": "error",
+					"enumDescriptions": [
+						"%config.singleKeyFallback.enum.error.desc%",
+						"%config.singleKeyFallback.enum.switch.desc%"
+					],
+					"description": "%config.singleKeyFallback.desc%"
+				},
+				"tokenrhythm.apiKeyRotationStatusCodes": {
+					"type": "array",
+					"items": {
+						"type": "number"
+					},
+					"default": [401, 402, 429, 503],
+					"description": "%config.apiKeyRotationStatusCodes.desc%"
+				},
+				"tokenrhythm.apiKeyRotationErrorPatterns": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": ["余额不足", "insufficient balance", "INSUFFICIENT_BALANCE", "balance", "RATE_LIMITED", "UPSTREAM_RATE_LIMITED"],
+					"description": "%config.apiKeyRotationErrorPatterns.desc%"
+				},
+				"tokenrhythm.apiKeyExhaustedCooldownMin": {
+					"type": "number",
+					"default": 10,
+					"minimum": 0,
+					"description": "%config.apiKeyExhaustedCooldownMin.desc%"
+				},
+				"tokenrhythm.balanceCheckEnabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "%config.balanceCheckEnabled.desc%"
+				},
+				"tokenrhythm.minBalanceCny": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "%config.minBalanceCny.desc%"
+				},
+				"tokenrhythm.balanceCheckIntervalSec": {
+					"type": "number",
+					"default": 60,
+					"minimum": 0,
+					"description": "%config.balanceCheckIntervalSec.desc%"
 				}
 			}
 		}

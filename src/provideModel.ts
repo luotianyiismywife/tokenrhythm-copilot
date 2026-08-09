@@ -5,6 +5,7 @@ import { logger } from "./logger";
 import { getBuiltInModelInfos, getMaxInputTokensRatio } from "./models";
 import { getApiModelIds, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful } from "./apiModelList";
 import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
+import { getPrimaryApiKey } from "./keyManager";
 import type { TokenRhythmModelItem } from "./types";
 import { l10n } from "./localize";
 
@@ -197,7 +198,9 @@ export async function prepareLanguageModelChatInformation(
     // ── Auto Model Discovery ──
     const enableAutoDiscovery = config.get<boolean>("tokenrhythm.enableAutoModelDiscovery", true);
     if (enableAutoDiscovery) {
-        const apiKey = await _secrets.get("tokenrhythm.apiKey");
+        // Use the primary key — any valid key works for /v1/models (no balance check).
+        const primaryKey = await getPrimaryApiKey(_secrets);
+        const apiKey = primaryKey?.value;
         const apiModelIds = await getApiModelIds(apiKey);
 
         if (apiModelIds.size > 0 && isApiFetchSuccessful()) {

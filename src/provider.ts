@@ -31,6 +31,31 @@ import { ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAG
 import type { StoredImage } from "./vision/types";
 import { logger } from "./logger";
 import { l10n } from "./localize";
+import {
+    getApiKeyMode,
+    getSingleKeyFallback,
+    getApiKeyStore,
+    getKeyRotationReason,
+    pickNextApiKey,
+    markApiKeyExhausted,
+    markApiKeyAvailable,
+    addApiKey,
+    isKeyRotationError,
+    maskApiKey,
+    type ApiKeyEntry,
+} from "./keyManager";
+import { getBalanceCheckEnabled, isKeyBalanceSufficient } from "./balanceCheck";
+
+/**
+ * Human-readable labels for key rotation failure reasons (keys are l10n keys).
+ */
+const REASON_TEXT: Record<string, string> = {
+    balance: "Balance insufficient",
+    invalid: "Key invalid",
+    rate_limited: "Rate limited (429)",
+    server_error: "Server error (503)",
+    api_error: "API error",
+};
 
 /**
  * Native Copilot Token Indicator
@@ -317,13 +342,6 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                 }
             }
 
-            // Get API key
-            const modelApiKey = await this.ensureApiKey();
-            if (!modelApiKey) {
-                logger.warn("apiKey.missing", {});
-                throw new Error(l10n("TokenRhythm API key not found"));
-            }
-
             // Send chat request
             const BASE_URL = baseUrl;
             if (!BASE_URL || !BASE_URL.startsWith("http")) {
@@ -348,236 +366,145 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             // Create undici fetch with custom bodyTimeout (extends TCP idle timeout during streaming)
             dispatchFetch = this._createFetchWithTimeout(requestTimeoutMs);
 
-            // Prepare headers with custom headers if specified
-            const requestHeaders = CommonApi.prepareHeaders(modelApiKey, apiMode, um?.headers);
-            logger.debug("request.headers", {
-                headers: logger.sanitizeHeaders(requestHeaders as Record<string, string>),
-            });
-            logger.debug("request.messages.origin", { messages });
+            // ── Multi-API-Key rotation loop ─────────────────────────────────────
+            // Select a key per round; skip keys with insufficient balance (proactive
+            // check via bound cookie) or keys that returned rotation errors
+            // (401/402/429/503 — status codes and text patterns configurable).
+            // If no keys are configured, prompt the user to add the first one.
+            const apiKeyMode = getApiKeyMode();
+            const singleFallback = getSingleKeyFallback();
+            let currentEntry: ApiKeyEntry | undefined;
+            let usedFallbackKey = false; // single mode fell back to rotation
+            // Track per-key failure reasons so the "all keys exhausted" error can
+            // show which key failed and why (masked), and distinguish transient
+            // failures (429/503 — retry later) from permanent ones (402/401 — check).
+            const failedKeys = new Map<string, string>();
 
-            if (apiMode === "anthropic") {
-                // Anthropic API mode
-                const anthropicApi = new AnthropicApi(model.id);
-                anthropicApi.onUsage = (usage) => {
-                    usageReportedDuringStream = true;
-                    // Always report to native Copilot indicator (use original progress, not trackingProgress wrapper)
-                    reportNativeUsage(usage, progress);
-                    // Conditionally update Advanced Token indicator
-                    if (enableThirdPartyIndicator) {
-                        recordUsage(usage);
-                        updateCumulativeTooltip(this.statusBarItem);
-                        updateStatusBarWithApiPrompt(usage.promptTokens, model.maxInputTokens || 128000, this.statusBarItem);
+            const firstEntry = await this.ensureApiKey();
+            if (!firstEntry) {
+                logger.warn("apiKey.missing", {});
+                throw new Error(l10n("TokenRhythm API key not found"));
+            }
+            const totalKeys = (await getApiKeyStore(this.secrets)).keys.length;
+
+            while (true) {
+                // If every key has failed at least one round, stop trying.
+                if (totalKeys > 0 && failedKeys.size >= totalKeys) {
+                    const detail = [...failedKeys.entries()]
+                        .map(([key, reason]) => `${maskApiKey(key)}: ${l10n(REASON_TEXT[reason] ?? reason)}`)
+                        .join("; ");
+                    logger.warn("key.allUnavailable", { detail });
+                    const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
+                    if (hasTransient) {
+                        throw new Error(l10nFormat("All API keys are temporarily unavailable ({0}). Please retry later.", detail));
                     }
-                };
-                const anthropicMessages = anthropicApi.convertMessages(messages, modelConfig);
-
-                // requestBody
-                let requestBody: AnthropicRequestBody = {
-                    model: um?.id ?? model.id,
-                    messages: anthropicMessages,
-                    stream: true,
-                };
-                requestBody = anthropicApi.prepareRequestBody(requestBody, um, options);
-
-                // Build Anthropic messages endpoint URL
-                const normalizedBaseUrl = BASE_URL.replace(/\/+$/, "");
-                const url = normalizedBaseUrl.endsWith("/v1")
-                    ? `${normalizedBaseUrl}/messages`
-                    : `${normalizedBaseUrl}/v1/messages`;
-                logger.debug("request.body", { url, requestBody });
-                const response = await executeWithRetry(async () => {
-                    const res = await dispatchFetch(url, {
-                        method: "POST",
-                        headers: requestHeaders,
-                        body: JSON.stringify(requestBody),
-                        signal: abortController.signal,
-                    });
-
-                    if (!res.ok) {
-                        const errorText = await res.text();
-                        console.error("[Anthropic Provider] Anthropic API error response", errorText);
-                        // Detect content moderation rejection for images — skip retries, this won't recover
-                        if (errorText.includes("image is sensitive")) {
-                            throw new Error(`IMAGE_SENSITIVE: ${errorText}`);
-                        }
-                        throw new Error(
-                            `Anthropic API error: [${res.status}] ${res.statusText}${errorText ? `\n${errorText}` : ""}\nURL: ${url}`
-                        );
-                    }
-
-                    return res;
-                }, retryConfig);
-
-                if (!response.body) {
-                    throw new Error("No response body from Anthropic API");
-                }
-                await anthropicApi.processStreamingResponse(response.body, trackingProgress, token);
-
-                // --- Second round: handle ask_image tool call interception ---
-                // Clear the first-round timeout before starting the second round
-                clearTimeout(timeoutId);
-                await this._handleInterceptedToolCall({
-                    api: anthropicApi,
-                    apiMode: "anthropic",
-                    model: model,
-                    um: um,
-                    modelApiKey: modelApiKey,
-                    baseUrl: BASE_URL,
-                    dispatchFetch: dispatchFetch,
-                    requestHeaders: requestHeaders,
-                    retryConfig: retryConfig,
-                    abortController: abortController,
-                    trackingProgress: trackingProgress,
-                    token: token,
-                    options: options,
-                });
-            } else if (apiMode === "responses") {
-                // Responses API mode (POST /v1/responses)
-                const responsesApi = new ResponsesApi(model.id);
-                responsesApi.onUsage = (usage) => {
-                    usageReportedDuringStream = true;
-                    // Always report to native Copilot indicator (use original progress, not trackingProgress wrapper)
-                    reportNativeUsage(usage, progress);
-                    // Conditionally update Advanced Token indicator
-                    if (enableThirdPartyIndicator) {
-                        recordUsage(usage);
-                        updateCumulativeTooltip(this.statusBarItem);
-                        updateStatusBarWithApiPrompt(usage.promptTokens, model.maxInputTokens || 128000, this.statusBarItem);
-                    }
-                };
-                const responsesMessages = responsesApi.convertMessages(messages, modelConfig);
-
-                // requestBody
-                let requestBody: Record<string, unknown> = {
-                    model: um?.id ?? model.id,
-                    input: responsesMessages,
-                    stream: true,
-                };
-                requestBody = responsesApi.prepareRequestBody(requestBody, um, options);
-
-                // Send Responses API request with retry
-                const url = `${BASE_URL.replace(/\/+$/, "")}/responses`;
-                logger.debug("request.body", { url, requestBody });
-                const response = await executeWithRetry(async () => {
-                    const res = await dispatchFetch(url, {
-                        method: "POST",
-                        headers: requestHeaders,
-                        body: JSON.stringify(requestBody),
-                        signal: abortController.signal,
-                    });
-
-                    if (!res.ok) {
-                        const errorText = await res.text();
-                        console.error("[TokenRhythm] Responses API error response", errorText);
-                        if (errorText.includes("image is sensitive")) {
-                            throw new Error(`IMAGE_SENSITIVE: ${errorText}`);
-                        }
-                        throw new Error(
-                            `Responses API error: [${res.status}] ${res.statusText}${errorText ? `\n${errorText}` : ""}\nURL: ${url}`
-                        );
-                    }
-
-                    return res;
-                }, retryConfig);
-
-                if (!response.body) {
-                    throw new Error("No response body from Responses API");
-                }
-                await responsesApi.processStreamingResponse(response.body, trackingProgress, token);
-
-                // --- Second round: handle ask_image tool call interception ---
-                clearTimeout(timeoutId);
-                await this._handleInterceptedToolCall({
-                    api: responsesApi,
-                    apiMode: "responses",
-                    model: model,
-                    um: um,
-                    modelApiKey: modelApiKey,
-                    baseUrl: BASE_URL,
-                    dispatchFetch: dispatchFetch,
-                    requestHeaders: requestHeaders,
-                    retryConfig: retryConfig,
-                    abortController: abortController,
-                    trackingProgress: trackingProgress,
-                    token: token,
-                    options: options,
-                });
-            } else {
-                // OpenAI Chat Completions API mode
-                const openaiApi = new OpenaiApi(model.id);
-                openaiApi.onUsage = (usage) => {
-                    usageReportedDuringStream = true;
-                    // Always report to native Copilot indicator (use original progress, not trackingProgress wrapper)
-                    reportNativeUsage(usage, progress);
-                    // Conditionally update Advanced Token indicator
-                    if (enableThirdPartyIndicator) {
-                        recordUsage(usage);
-                        updateCumulativeTooltip(this.statusBarItem);
-                        updateStatusBarWithApiPrompt(usage.promptTokens, model.maxInputTokens || 128000, this.statusBarItem);
-                    }
-                };
-                const openaiMessages = openaiApi.convertMessages(messages, modelConfig);
-
-                // requestBody
-                let requestBody: Record<string, unknown> = {
-                    model: um?.id ?? model.id,
-                    messages: openaiMessages,
-                    stream: true,
-                    stream_options: { include_usage: true },
-                };
-
-                requestBody = openaiApi.prepareRequestBody(requestBody, um, options);
-
-                // Send chat request with retry
-                const url = `${BASE_URL.replace(/\/+$/, "")}/chat/completions`;
-                logger.debug("request.body", { url, requestBody });
-                const response = await executeWithRetry(async () => {
-                    const res = await dispatchFetch(url, {
-                        method: "POST",
-                        headers: requestHeaders,
-                        body: JSON.stringify(requestBody),
-                        signal: abortController.signal,
-                    });
-
-                    if (!res.ok) {
-                        const errorText = await res.text();
-                        console.error("[TokenRhythm] API error response", errorText);
-                        // Detect content moderation rejection for images — skip retries, this won't recover
-                        if (errorText.includes("image is sensitive")) {
-                            throw new Error(`IMAGE_SENSITIVE: ${errorText}`);
-                        }
-                        throw new Error(
-                            `API error: [${res.status}] ${res.statusText}${errorText ? `\n${errorText}` : ""}\nURL: ${url}`
-                        );
-                    }
-
-                    return res;
-                }, retryConfig);
-
-                if (!response.body) {
-                    throw new Error("No response body from API");
+                    throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail));
                 }
 
-                await openaiApi.processStreamingResponse(response.body, trackingProgress, token);
+                // 1. Pick the next candidate key
+                currentEntry = await pickNextApiKey(this.secrets, apiKeyMode);
+                if (!currentEntry) {
+                    // single mode + fallback=switch → degrade to rotation
+                    if (apiKeyMode === "single" && singleFallback === "switch" && !usedFallbackKey) {
+                        usedFallbackKey = true;
+                        currentEntry = await pickNextApiKey(this.secrets, "rotation");
+                    }
+                    if (!currentEntry) {
+                        logger.warn("key.allUnavailable", {});
+                        throw new Error(l10n("All API keys are unavailable"));
+                    }
+                }
 
-                // --- Second round: handle ask_image tool call interception ---
-                // Clear the first-round timeout before starting the second round
-                clearTimeout(timeoutId);
-                await this._handleInterceptedToolCall({
-                    api: openaiApi,
-                    apiMode: "openai",
-                    model: model,
-                    um: um,
-                    modelApiKey: modelApiKey,
-                    baseUrl: BASE_URL,
-                    dispatchFetch: dispatchFetch,
-                    requestHeaders: requestHeaders,
-                    retryConfig: retryConfig,
-                    abortController: abortController,
-                    trackingProgress: trackingProgress,
-                    token: token,
-                    options: options,
+                // 2. Proactive balance pre-check (cookie-bound keys only)
+                if (getBalanceCheckEnabled() && currentEntry.cookie) {
+                    const sufficient = await isKeyBalanceSufficient(currentEntry.cookie);
+                    if (!sufficient) {
+                        failedKeys.set(currentEntry.value, "balance");
+                        await markApiKeyExhausted(this.secrets, currentEntry.value, "balance");
+                        logger.warn("key.rotation", {
+                            key: maskApiKey(currentEntry.value),
+                            reason: "balance_check",
+                        });
+                        continue; // try next key
+                    }
+                    // Self-heal: previously marked unavailable but balance is back
+                    if (currentEntry.available === false) {
+                        await markApiKeyAvailable(this.secrets, currentEntry.value);
+                        logger.info("key.recovered", { key: maskApiKey(currentEntry.value) });
+                    }
+                }
+
+                // 3. Prepare headers with the selected key
+                const requestHeaders = CommonApi.prepareHeaders(currentEntry.value, apiMode, um?.headers);
+                logger.debug("request.headers", {
+                    key: maskApiKey(currentEntry.value),
+                    headers: logger.sanitizeHeaders(requestHeaders as Record<string, string>),
                 });
+                logger.debug("request.messages.origin", { messages });
+
+                // 4. Execute the full API request (protocol dispatch + vision proxy)
+                try {
+                    await this._executeApiRequest({
+                        apiMode,
+                        model,
+                        um,
+                        modelConfig,
+                        messages,
+                        options,
+                        trackingProgress,
+                        token,
+                        apiKey: currentEntry.value,
+                        baseUrl: BASE_URL,
+                        requestHeaders,
+                        retryConfig,
+                        abortController,
+                        dispatchFetch,
+                        timeoutId,
+                        onUsage: (usage) => {
+                            usageReportedDuringStream = true;
+                            // Always report to native Copilot indicator (use original progress, not trackingProgress wrapper)
+                            reportNativeUsage(usage, progress);
+                            // Conditionally update Advanced Token indicator
+                            if (enableThirdPartyIndicator) {
+                                recordUsage(usage);
+                                updateCumulativeTooltip(this.statusBarItem);
+                                updateStatusBarWithApiPrompt(usage.promptTokens, model.maxInputTokens || 128000, this.statusBarItem);
+                            }
+                        },
+                    });
+
+                    // Success — self-heal if this key was previously marked unavailable
+                    if (currentEntry.available === false) {
+                        await markApiKeyAvailable(this.secrets, currentEntry.value);
+                        logger.info("key.recovered", { key: maskApiKey(currentEntry.value) });
+                    }
+                    if (usedFallbackKey) {
+                        vscode.window.showInformationMessage(
+                            l10nFormat("Current API key is unavailable, switched to {0}", maskApiKey(currentEntry.value))
+                        );
+                    }
+                    break;
+                } catch (err) {
+                    // User cancellation / timeout → re-throw so the outer catch handles them
+                    if (token.isCancellationRequested) {
+                        throw err;
+                    }
+                    if (abortController.signal.aborted) {
+                        throw err; // timeout (outer catch shows friendly message)
+                    }
+                    if (isKeyRotationError(err)) {
+                        const reason = getKeyRotationReason(err);
+                        failedKeys.set(currentEntry.value, reason);
+                        await markApiKeyExhausted(this.secrets, currentEntry.value, reason);
+                        logger.warn("key.rotation", {
+                            key: maskApiKey(currentEntry.value),
+                            reason,
+                            error: err instanceof Error ? err.message : String(err),
+                        });
+                        continue; // try next key
+                    }
+                    throw err; // non-rotation error (400/403/500/network/IMAGE_SENSITIVE…)
+                }
             }
 
             // Fallback: if API did not return usage data, use client-side calculation for native indicator
@@ -658,6 +585,245 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             // Auto-hide the status bar after inactivity — it only reflects TokenRhythm
             // model usage, so hide it once the user stops using these models.
             scheduleStatusBarHide(this.statusBarItem);
+        }
+    }
+
+    /**
+     * Execute a single full API request for the current key: protocol dispatch
+     * (openai / anthropic / responses), streaming, and the ask_image vision
+     * proxy second round. Called once per key inside the rotation loop.
+     * Errors are thrown to the caller, which decides whether to rotate keys.
+     */
+    private async _executeApiRequest(params: {
+        apiMode: string;
+        model: LanguageModelChatInformation;
+        um: TokenRhythmModelItem | undefined;
+        modelConfig: { includeReasoningInRequest: boolean; vision: boolean };
+        messages: readonly LanguageModelChatRequestMessage[];
+        options: ProvideLanguageModelChatResponseOptions;
+        trackingProgress: Progress<LanguageModelResponsePart>;
+        token: CancellationToken;
+        apiKey: string;
+        baseUrl: string;
+        requestHeaders: Record<string, string>;
+        retryConfig: ReturnType<typeof createRetryConfig>;
+        abortController: AbortController;
+        dispatchFetch: typeof fetch;
+        timeoutId: ReturnType<typeof setTimeout> | undefined;
+        onUsage: (usage: StreamUsage) => void;
+    }): Promise<void> {
+        const {
+            apiMode,
+            model,
+            um,
+            modelConfig,
+            messages,
+            options,
+            trackingProgress,
+            token,
+            apiKey,
+            baseUrl: BASE_URL,
+            requestHeaders,
+            retryConfig,
+            abortController,
+            dispatchFetch,
+            timeoutId,
+            onUsage,
+        } = params;
+
+        if (apiMode === "anthropic") {
+            // Anthropic API mode
+            const anthropicApi = new AnthropicApi(model.id);
+            anthropicApi.onUsage = onUsage;
+            const anthropicMessages = anthropicApi.convertMessages(messages, modelConfig);
+
+            // requestBody
+            let requestBody: AnthropicRequestBody = {
+                model: um?.id ?? model.id,
+                messages: anthropicMessages,
+                stream: true,
+            };
+            requestBody = anthropicApi.prepareRequestBody(requestBody, um, options);
+
+            // Build Anthropic messages endpoint URL
+            const normalizedBaseUrl = BASE_URL.replace(/\/+$/, "");
+            const url = normalizedBaseUrl.endsWith("/v1")
+                ? `${normalizedBaseUrl}/messages`
+                : `${normalizedBaseUrl}/v1/messages`;
+            logger.debug("request.body", { url, requestBody });
+            const response = await executeWithRetry(async () => {
+                const res = await dispatchFetch(url, {
+                    method: "POST",
+                    headers: requestHeaders,
+                    body: JSON.stringify(requestBody),
+                    signal: abortController.signal,
+                });
+
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    console.error("[Anthropic Provider] Anthropic API error response", errorText);
+                    // Detect content moderation rejection for images — skip retries, this won't recover
+                    if (errorText.includes("image is sensitive")) {
+                        throw new Error(`IMAGE_SENSITIVE: ${errorText}`);
+                    }
+                    throw new Error(
+                        `Anthropic API error: [${res.status}] ${res.statusText}${errorText ? `\n${errorText}` : ""}\nURL: ${url}`
+                    );
+                }
+
+                return res;
+            }, retryConfig);
+
+            if (!response.body) {
+                throw new Error("No response body from Anthropic API");
+            }
+            await anthropicApi.processStreamingResponse(response.body, trackingProgress, token);
+
+            // --- Second round: handle ask_image tool call interception ---
+            // Clear the first-round timeout before starting the second round
+            clearTimeout(timeoutId);
+            await this._handleInterceptedToolCall({
+                api: anthropicApi,
+                apiMode: "anthropic",
+                model: model,
+                um: um,
+                modelApiKey: apiKey,
+                baseUrl: BASE_URL,
+                dispatchFetch: dispatchFetch,
+                requestHeaders: requestHeaders,
+                retryConfig: retryConfig,
+                abortController: abortController,
+                trackingProgress: trackingProgress,
+                token: token,
+                options: options,
+            });
+        } else if (apiMode === "responses") {
+            // Responses API mode (POST /v1/responses)
+            const responsesApi = new ResponsesApi(model.id);
+            responsesApi.onUsage = onUsage;
+            const responsesMessages = responsesApi.convertMessages(messages, modelConfig);
+
+            // requestBody
+            let requestBody: Record<string, unknown> = {
+                model: um?.id ?? model.id,
+                input: responsesMessages,
+                stream: true,
+            };
+            requestBody = responsesApi.prepareRequestBody(requestBody, um, options);
+
+            // Send Responses API request with retry
+            const url = `${BASE_URL.replace(/\/+$/, "")}/responses`;
+            logger.debug("request.body", { url, requestBody });
+            const response = await executeWithRetry(async () => {
+                const res = await dispatchFetch(url, {
+                    method: "POST",
+                    headers: requestHeaders,
+                    body: JSON.stringify(requestBody),
+                    signal: abortController.signal,
+                });
+
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    console.error("[TokenRhythm] Responses API error response", errorText);
+                    if (errorText.includes("image is sensitive")) {
+                        throw new Error(`IMAGE_SENSITIVE: ${errorText}`);
+                    }
+                    throw new Error(
+                        `Responses API error: [${res.status}] ${res.statusText}${errorText ? `\n${errorText}` : ""}\nURL: ${url}`
+                    );
+                }
+
+                return res;
+            }, retryConfig);
+
+            if (!response.body) {
+                throw new Error("No response body from Responses API");
+            }
+            await responsesApi.processStreamingResponse(response.body, trackingProgress, token);
+
+            // --- Second round: handle ask_image tool call interception ---
+            clearTimeout(timeoutId);
+            await this._handleInterceptedToolCall({
+                api: responsesApi,
+                apiMode: "responses",
+                model: model,
+                um: um,
+                modelApiKey: apiKey,
+                baseUrl: BASE_URL,
+                dispatchFetch: dispatchFetch,
+                requestHeaders: requestHeaders,
+                retryConfig: retryConfig,
+                abortController: abortController,
+                trackingProgress: trackingProgress,
+                token: token,
+                options: options,
+            });
+        } else {
+            // OpenAI Chat Completions API mode
+            const openaiApi = new OpenaiApi(model.id);
+            openaiApi.onUsage = onUsage;
+            const openaiMessages = openaiApi.convertMessages(messages, modelConfig);
+
+            // requestBody
+            let requestBody: Record<string, unknown> = {
+                model: um?.id ?? model.id,
+                messages: openaiMessages,
+                stream: true,
+                stream_options: { include_usage: true },
+            };
+
+            requestBody = openaiApi.prepareRequestBody(requestBody, um, options);
+
+            // Send chat request with retry
+            const url = `${BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+            logger.debug("request.body", { url, requestBody });
+            const response = await executeWithRetry(async () => {
+                const res = await dispatchFetch(url, {
+                    method: "POST",
+                    headers: requestHeaders,
+                    body: JSON.stringify(requestBody),
+                    signal: abortController.signal,
+                });
+
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    console.error("[TokenRhythm] API error response", errorText);
+                    // Detect content moderation rejection for images — skip retries, this won't recover
+                    if (errorText.includes("image is sensitive")) {
+                        throw new Error(`IMAGE_SENSITIVE: ${errorText}`);
+                    }
+                    throw new Error(
+                        `API error: [${res.status}] ${res.statusText}${errorText ? `\n${errorText}` : ""}\nURL: ${url}`
+                    );
+                }
+
+                return res;
+            }, retryConfig);
+
+            if (!response.body) {
+                throw new Error("No response body from API");
+            }
+
+            await openaiApi.processStreamingResponse(response.body, trackingProgress, token);
+
+            // --- Second round: handle ask_image tool call interception ---
+            // Clear the first-round timeout before starting the second round
+            clearTimeout(timeoutId);
+            await this._handleInterceptedToolCall({
+                api: openaiApi,
+                apiMode: "openai",
+                model: model,
+                um: um,
+                modelApiKey: apiKey,
+                baseUrl: BASE_URL,
+                dispatchFetch: dispatchFetch,
+                requestHeaders: requestHeaders,
+                retryConfig: retryConfig,
+                abortController: abortController,
+                trackingProgress: trackingProgress,
+                token: token,
+                options: options,
+            });
         }
     }
 
@@ -1136,24 +1302,29 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
     }
 
     /**
-     * Ensure an API key exists in SecretStorage, optionally prompting the user when not silent.
+     * Ensure at least one API key exists. When no key is configured, prompts the
+     * user to enter one (saved into the multi-key store). Returns the first key
+     * entry if any exists, undefined otherwise.
      */
-    private async ensureApiKey(): Promise<string | undefined> {
-        let apiKey = await this.secrets.get("tokenrhythm.apiKey");
-
-        if (!apiKey) {
-            const entered = await vscode.window.showInputBox({
-                title: l10n("TokenRhythm Provider API Key"),
-                prompt: l10n("Enter your TokenRhythm API key"),
-                ignoreFocusOut: true,
-                password: true,
-            });
-            if (entered && entered.trim()) {
-                apiKey = entered.trim();
-                await this.secrets.store("tokenrhythm.apiKey", apiKey);
-            }
+    private async ensureApiKey(): Promise<ApiKeyEntry | undefined> {
+        const store = await getApiKeyStore(this.secrets);
+        if (store.keys.length > 0) {
+            return store.keys[store.activeIndex] ?? store.keys[0];
         }
 
-        return apiKey;
+        const entered = await vscode.window.showInputBox({
+            title: l10n("TokenRhythm Provider API Key"),
+            prompt: l10n("Enter your TokenRhythm API key"),
+            ignoreFocusOut: true,
+            password: true,
+        });
+        if (entered && entered.trim()) {
+            const added = await addApiKey(this.secrets, { value: entered.trim(), available: null });
+            if (added) {
+                const updated = await getApiKeyStore(this.secrets);
+                return updated.keys[0];
+            }
+        }
+        return undefined;
     }
 }

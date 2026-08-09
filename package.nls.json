@@ -56,7 +56,21 @@
 	"config.enableResponsesApi.desc": "Use the Responses API protocol for models that support it (supports_responses=true, e.g. qwen3.7-max, deepseek-v4-flash-0731) when apiMode is set to auto. **Disabled by default** — the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, and non-standard multi-round tool backfill), so models default to the OpenAI-compatible format which is more mature. Enable this only if you want to try the Responses protocol.",
 	"config.enableAnthropicApi.desc": "Use the Anthropic Messages protocol in auto mode for models detected as supports_anthropic=true at startup (from /v1/models — dynamic, no hardcoded model IDs). **Disabled by default** — the Anthropic endpoint has compatibility issues with some models (e.g. DeepSeek forced thinking + temperature returns 400), so the more mature OpenAI-compatible format is recommended. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI.",
 
+	"config.apiKeyMode.desc": "API Key usage mode: rotation (round-robin across all keys, skipping unavailable ones) or single (only use the current key).",
+	"config.apiKeyMode.enum.rotation.desc": "Round-robin across all API keys, automatically skipping unavailable ones.",
+	"config.apiKeyMode.enum.single.desc": "Only use the currently selected API key.",
+	"config.singleKeyFallback.desc": "Behavior when the current key is unavailable in single mode: error (report an error without switching) or switch (automatically switch to the next available key and show a notification).",
+	"config.singleKeyFallback.enum.error.desc": "Report an error without switching to another key.",
+	"config.singleKeyFallback.enum.switch.desc": "Automatically switch to the next available key and show a notification in the bottom-right corner.",
+	"config.apiKeyRotationStatusCodes.desc": "HTTP status codes that trigger automatic API key rotation (matched against [code] or status code in error messages). Default: [401, 402, 429, 503] — invalid key, insufficient balance, rate limit, and server busy all rotate to the next key.",
+	"config.apiKeyRotationErrorPatterns.desc": "Error message text patterns that trigger automatic API key rotation (matched case-insensitively).",
+	"config.apiKeyExhaustedCooldownMin.desc": "Cooldown (minutes) for transiently exhausted keys (e.g. rate-limited with 429) before they can be reused. 0 = immediately reusable.",
+	"config.balanceCheckEnabled.desc": "Enable proactive balance pre-check via the tr_session cookie bound to each key. When a key's available balance is below minBalanceCny it is skipped automatically. Falls back to passive detection (402/401/429) when the cookie is missing or fails.",
+	"config.minBalanceCny.desc": "Balance threshold (CNY): a key whose available balance is at or below this value is treated as exhausted and skipped. Set to a positive value to switch before balance hits zero.",
+	"config.balanceCheckIntervalSec.desc": "Balance query cache TTL (seconds). The balance of the same cookie is cached for this duration to avoid hitting the user-center API too often. 0 = query every request.",
+
 	"command.setModelPreset": "Set Model Temperature Preset",
+	"command.manageApiKeys": "Manage API Keys",
 
 	"walkthrough.title": "TokenRhythm for Copilot Chat",
 	"walkthrough.description": "Set up TokenRhythm models in Copilot Chat.",

@@ -7,6 +7,21 @@ import type { ModelPreset } from "./types";
 import { abortCommitGeneration, generateCommitMsg } from "./gitCommit/commitMessageGenerator";
 import { TokenizerManager } from "./tokenizer/tokenizerManager";
 import { syncModelsOnStartup } from "./modelSync";
+import {
+    addApiKey,
+    getApiKeyStore,
+    getKeyDisplayStatus,
+    getTransientExhaustedInfo,
+    maskApiKey,
+    maskCookie,
+    removeApiKey,
+    resetExhaustedKeys,
+    setActiveKey,
+    setKeyCookie,
+    updateKeyAvailability,
+    type ApiKeyEntry,
+} from "./keyManager";
+import { testKeyAvailability } from "./balanceCheck";
 
 // ---- Walkthrough / Welcome constants ----
 
@@ -41,10 +56,12 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Management command to configure API key
+    // Management command to configure API key (legacy single-key flow,
+    // writes into the new multi-key store as a single-element list)
     context.subscriptions.push(
         vscode.commands.registerCommand("tokenrhythm.setApiKey", async () => {
-            const existing = await context.secrets.get("tokenrhythm.apiKey");
+            const store = await getApiKeyStore(context.secrets);
+            const existing = store.keys.length > 0 ? store.keys[store.activeIndex]?.value : undefined;
             const apiKey = await vscode.window.showInputBox({
                 title: l10n("TokenRhythm Provider API Key"),
                 prompt: existing ? l10n("Update your TokenRhythm API key") : l10n("Enter your TokenRhythm API key"),
@@ -56,12 +73,34 @@ export function activate(context: vscode.ExtensionContext) {
                 return; // user canceled
             }
             if (!apiKey.trim()) {
+                // Clear all keys
+                await context.secrets.store("tokenrhythm.apiKeys", JSON.stringify({ keys: [], activeIndex: 0 }));
                 await context.secrets.delete("tokenrhythm.apiKey");
                 vscode.window.showInformationMessage(l10n("TokenRhythm API key cleared."));
                 return;
             }
-            await context.secrets.store("tokenrhythm.apiKey", apiKey.trim());
+            const trimmed = apiKey.trim();
+            if (existing && existing === trimmed) {
+                vscode.window.showInformationMessage(l10n("TokenRhythm API key saved."));
+                return;
+            }
+            const added = await addApiKey(context.secrets, { value: trimmed, available: null });
+            if (!added && store.keys.length > 0) {
+                // Same value already exists — treat as "set active" to it
+                const idx = store.keys.findIndex((k) => k.value === trimmed);
+                if (idx >= 0) {
+                    await setActiveKey(context.secrets, idx);
+                }
+            }
             vscode.window.showInformationMessage(l10n("TokenRhythm API key saved."));
+        })
+    );
+
+    // Multi-key management command: QuickPick to add/delete keys, set current,
+    // bind cookies, reset exhausted states, and manually test availability.
+    context.subscriptions.push(
+        vscode.commands.registerCommand("tokenrhythm.manageApiKeys", async () => {
+            await showApiKeyManager(context);
         })
     );
 
@@ -218,17 +257,271 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
+ * API Key 管理 QuickPick。
+ * 支持：添加 / 删除 / 设为当前使用 / 重置失效状态 / 绑定或清除 cookie / 检测可用性。
+ * 所有 key 与 cookie 均以脱敏形式展示。
+ */
+async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void> {
+    const secrets = context.secrets;
+
+    const render = async (): Promise<vscode.QuickPickItem[] | undefined> => {
+        const store = await getApiKeyStore(secrets);
+        const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
+
+        if (store.keys.length === 0) {
+            items.push({ label: l10n("No API keys configured"), kind: vscode.QuickPickItemKind.Separator });
+        } else {
+            store.keys.forEach((entry, i) => {
+                const status = getKeyDisplayStatus(entry);
+                const transient = getTransientExhaustedInfo(entry.value);
+                let statusIcon = "$(question)";
+                let statusText = l10n("Not checked");
+                if (status === "available") {
+                    statusIcon = "$(check)";
+                    statusText = l10n("Available");
+                } else if (status === "unavailable") {
+                    statusIcon = "$(error)";
+                    statusText = l10n("Unavailable");
+                } else if (status === "cooldown" && transient) {
+                    statusIcon = "$(clock)";
+                    statusText = l10nFormat("Cooldown ({0}s)", String(transient.remainingSec));
+                }
+                const isActive = i === store.activeIndex;
+                const detail = [
+                    `${statusIcon} ${statusText}`,
+                    isActive ? `$(star) ${l10n("Current")}` : "",
+                    entry.cookie ? `$(key) ${l10n("Cookie bound")}` : `$(key) ${l10n("Cookie not bound")}`,
+                ]
+                    .filter(Boolean)
+                    .join("  ·  ");
+                items.push({
+                    label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
+                    description: detail,
+                    action: "select",
+                    index: i,
+                });
+            });
+        }
+
+        items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
+        items.push({ label: `$(plus) ${l10n("Add API Key")}`, action: "add" });
+        if (store.keys.length > 0) {
+            items.push({ label: `$(trash) ${l10n("Delete API Key")}`, action: "delete" });
+            items.push({ label: `$(star) ${l10n("Set as Current")}`, action: "setActive" });
+            items.push({ label: `$(refresh) ${l10n("Reset Exhausted States")}`, action: "reset" });
+            items.push({ label: `$(beaker) ${l10n("Check Availability")}`, action: "check" });
+            items.push({ label: `$(link) ${l10n("Bind/Update Cookie")}`, action: "bindCookie" });
+            items.push({ label: `$(unlink) ${l10n("Clear Cookie")}`, action: "clearCookie" });
+        }
+        return items;
+    };
+
+    // ---- Add key flow ----
+    const addKeyFlow = async (): Promise<boolean> => {
+        const keyValue = await vscode.window.showInputBox({
+            title: l10n("Add API Key"),
+            prompt: l10n("Enter your TokenRhythm API key"),
+            ignoreFocusOut: true,
+            password: true,
+        });
+        if (keyValue === undefined || !keyValue.trim()) {
+            return false;
+        }
+        const trimmed = keyValue.trim();
+        const label = await vscode.window.showInputBox({
+            title: l10n("Add API Key"),
+            prompt: l10n("Enter an optional label for this key"),
+            ignoreFocusOut: true,
+        });
+        const cookie = await vscode.window.showInputBox({
+            title: l10n("Add API Key"),
+            prompt: l10n("Enter the tr_session cookie for this key (optional)"),
+            ignoreFocusOut: true,
+            password: true,
+        });
+        const added = await addApiKey(secrets, {
+            value: trimmed,
+            label: label?.trim() || undefined,
+            cookie: cookie?.trim() || undefined,
+            available: null,
+        });
+        if (!added) {
+            vscode.window.showWarningMessage(l10n("API key already exists"));
+            return false;
+        }
+        vscode.window.showInformationMessage(l10n("API key added"));
+        return true;
+    };
+
+    // ---- Select a key (for delete/setActive/check/bind/clear) ----
+    const pickKey = async (title: string): Promise<{ index: number; entry: ApiKeyEntry } | undefined> => {
+        const store = await getApiKeyStore(secrets);
+        if (store.keys.length === 0) {
+            vscode.window.showInformationMessage(l10n("No API keys configured"));
+            return undefined;
+        }
+        const picked = await vscode.window.showQuickPick(
+            store.keys.map((entry, i) => ({
+                label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
+                description: entry.cookie ? `$(key) ${maskCookie(entry.cookie)}` : undefined,
+                index: i,
+                entry,
+            })),
+            { title, ignoreFocusOut: true }
+        );
+        if (!picked) {
+            return undefined;
+        }
+        return { index: picked.index as number, entry: picked.entry as ApiKeyEntry };
+    };
+
+    // ---- Check availability flow ----
+    const checkAvailabilityFlow = async (index: number): Promise<void> => {
+        const store = await getApiKeyStore(secrets);
+        const entry = store.keys[index];
+        if (!entry) {
+            return;
+        }
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: l10n("Checking availability...") },
+            async () => {
+                const result = await testKeyAvailability(entry);
+                if (result.ok === true) {
+                    await updateKeyAvailability(secrets, entry.value, true);
+                    vscode.window.showInformationMessage(l10n("Key is available"));
+                } else if (result.ok === false) {
+                    await updateKeyAvailability(secrets, entry.value, false);
+                    if (result.reason === "balance") {
+                        vscode.window.showWarningMessage(
+                            l10nFormat("Key balance is insufficient (≤ {0} CNY)", String(0))
+                        );
+                    } else {
+                        vscode.window.showWarningMessage(l10n("Key is invalid (401)"));
+                    }
+                } else {
+                    vscode.window.showWarningMessage(l10n("Unable to determine availability, please retry later"));
+                }
+            }
+        );
+    };
+
+    // ---- Cookie binding flow ----
+    const bindCookieFlow = async (index: number): Promise<void> => {
+        const store = await getApiKeyStore(secrets);
+        const entry = store.keys[index];
+        if (!entry) {
+            return;
+        }
+        const cookie = await vscode.window.showInputBox({
+            title: l10n("Bind/Update Cookie"),
+            prompt: l10n("Enter the tr_session cookie value for this key"),
+            ignoreFocusOut: true,
+            password: true,
+            value: entry.cookie ?? "",
+        });
+        if (cookie === undefined) {
+            return;
+        }
+        await setKeyCookie(secrets, index, cookie.trim() || undefined);
+        vscode.window.showInformationMessage(cookie.trim() ? l10n("Cookie updated") : l10n("Cookie cleared"));
+    };
+
+    // ---- Main loop ----
+    while (true) {
+        const items = await render();
+        if (!items) {
+            return;
+        }
+        const picked = await vscode.window.showQuickPick(items, {
+            title: l10n("Select an API key to manage"),
+            placeHolder: l10n("Select an API key to manage"),
+            ignoreFocusOut: true,
+        });
+        if (!picked) {
+            return; // canceled
+        }
+        const pickedAction = (picked as { action?: string }).action;
+        if (!pickedAction) {
+            return; // selected nothing actionable
+        }
+
+        switch (pickedAction) {
+            case "add": {
+                await addKeyFlow();
+                break;
+            }
+            case "delete": {
+                const keyPick = await pickKey(l10n("Delete API Key"));
+                if (!keyPick) {
+                    break;
+                }
+                const confirm = await vscode.window.showWarningMessage(
+                    l10nFormat("Confirm delete API key {0}?", maskApiKey(keyPick.entry.value)),
+                    { modal: true },
+                    l10n("Delete API Key")
+                );
+                if (confirm === l10n("Delete API Key")) {
+                    await removeApiKey(secrets, keyPick.index);
+                    vscode.window.showInformationMessage(l10n("API key deleted"));
+                }
+                break;
+            }
+            case "setActive": {
+                const keyPick = await pickKey(l10n("Set as Current"));
+                if (!keyPick) {
+                    break;
+                }
+                await setActiveKey(secrets, keyPick.index);
+                vscode.window.showInformationMessage(l10n("Set as current API key"));
+                break;
+            }
+            case "reset": {
+                await resetExhaustedKeys(secrets, true);
+                vscode.window.showInformationMessage(l10n("Reset exhausted key states"));
+                break;
+            }
+            case "check": {
+                const keyPick = await pickKey(l10n("Check Availability"));
+                if (!keyPick) {
+                    break;
+                }
+                await checkAvailabilityFlow(keyPick.index);
+                break;
+            }
+            case "bindCookie": {
+                const keyPick = await pickKey(l10n("Bind/Update Cookie"));
+                if (!keyPick) {
+                    break;
+                }
+                await bindCookieFlow(keyPick.index);
+                break;
+            }
+            case "clearCookie": {
+                const keyPick = await pickKey(l10n("Clear Cookie"));
+                if (!keyPick) {
+                    break;
+                }
+                await setKeyCookie(secrets, keyPick.index, undefined);
+                vscode.window.showInformationMessage(l10n("Cookie cleared"));
+                break;
+            }
+            default:
+                return;
+        }
+    }
+}
+
+/**
  * Show the welcome walkthrough on first activation if no API key is configured.
  * Once shown (or if a key already exists) the flag is persisted so it won't
  * reappear after subsequent reloads.
- */
-async function showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void> {
+ */async function showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void> {
     try {
         if (context.globalState.get<boolean>(WELCOME_SHOWN_KEY)) {
             return;
         }
-        const apiKey = await context.secrets.get("tokenrhythm.apiKey");
-        if (apiKey) {
+        const store = await getApiKeyStore(context.secrets);
+        if (store.keys.length > 0) {
             // API key already set — no need to show welcome
             await context.globalState.update(WELCOME_SHOWN_KEY, true);
             return;

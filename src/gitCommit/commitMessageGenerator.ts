@@ -10,6 +10,17 @@ import { getResponsesSupportedModelIds, getAnthropicSupportedModelIds } from "..
 import { logger } from "../logger";
 import { l10n } from "../localize";
 import type { TokenRhythmModelItem } from "../types";
+import {
+    addApiKey,
+    getApiKeyMode,
+    getApiKeyStore,
+    getSingleKeyFallback,
+    isKeyRotationError,
+    markApiKeyExhausted,
+    pickNextApiKey,
+    type ApiKeyEntry,
+} from "../keyManager";
+import { getBalanceCheckEnabled, isKeyBalanceSufficient } from "../balanceCheck";
 
 /**
  * Git commit message generator module.
@@ -145,23 +156,26 @@ async function generateCommitMsgForRepository(secrets: vscode.SecretStorage, rep
     );
 }
 
-async function ensureApiKey(secrets: vscode.SecretStorage): Promise<string | undefined> {
-    let apiKey = await secrets.get("tokenrhythm.apiKey");
-
-    if (!apiKey) {
-        const entered = await vscode.window.showInputBox({
-            title: l10n("TokenRhythm Provider API Key"),
-            prompt: l10n("Enter your TokenRhythm API key"),
-            ignoreFocusOut: true,
-            password: true,
-        });
-        if (entered && entered.trim()) {
-            apiKey = entered.trim();
-            await secrets.store("tokenrhythm.apiKey", apiKey);
-        }
+async function ensureApiKeyEntry(secrets: vscode.SecretStorage): Promise<ApiKeyEntry | undefined> {
+    const store = await getApiKeyStore(secrets);
+    if (store.keys.length > 0) {
+        return store.keys[store.activeIndex] ?? store.keys[0];
     }
 
-    return apiKey;
+    const entered = await vscode.window.showInputBox({
+        title: l10n("TokenRhythm Provider API Key"),
+        prompt: l10n("Enter your TokenRhythm API key"),
+        ignoreFocusOut: true,
+        password: true,
+    });
+    if (entered && entered.trim()) {
+        const added = await addApiKey(secrets, { value: entered.trim(), available: null });
+        if (added) {
+            const updated = await getApiKeyStore(secrets);
+            return updated.keys[0];
+        }
+    }
+    return undefined;
 }
 
 async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff: string, inputBox: any, repoPath?: string) {
@@ -235,8 +249,8 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         modelId = selectedModel.id;
         logger.info("commit.start", { modelId });
 
-        const apiKey = await ensureApiKey(secrets);
-        if (!apiKey) {
+        const primaryEntry = await ensureApiKeyEntry(secrets);
+        if (!primaryEntry) {
             throw new Error(l10n("TokenRhythm API key not found"));
         }
 
@@ -267,8 +281,8 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         if (apiModeSetting === "openai" || apiModeSetting === "anthropic" || apiModeSetting === "responses") {
             apiMode = apiModeSetting;
         } else {
-            const responsesModelIds = await getResponsesSupportedModelIds(apiKey);
-            const anthropicModelIds = await getAnthropicSupportedModelIds(apiKey);
+            const responsesModelIds = await getResponsesSupportedModelIds(primaryEntry.value);
+            const anthropicModelIds = await getAnthropicSupportedModelIds(primaryEntry.value);
             if (enableResponsesApi && responsesModelIds.has(commitModelId)) {
                 apiMode = "responses";
             } else if (enableAnthropicApi && anthropicModelIds.has(commitModelId)) {
@@ -281,21 +295,72 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         // the correct headers (x-api-key for anthropic, Bearer for openai/responses).
         selectedModel.apiMode = apiMode;
 
-        const apiInstance = apiMode === "anthropic"
-            ? new AnthropicApi(modelId)
-            : apiMode === "responses"
-                ? new ResponsesApi(modelId)
-                : new OpenaiApi(modelId);
-
-        commitGenerationAbortController = new AbortController();
-        const stream = apiInstance.createMessage(selectedModel, systemPrompt, messages, baseUrl, apiKey, commitGenerationAbortController.signal);
-
+        // ── Multi-API-Key rotation loop for commit generation ──────────────────
+        const apiKeyMode = getApiKeyMode();
+        const singleFallback = getSingleKeyFallback();
+        let usedFallbackKey = false; // single mode fell back to rotation
         let response = "";
-        for await (const chunk of stream) {
-            commitGenerationAbortController.signal.throwIfAborted();
-            if (chunk.type === "text") {
-                response += chunk.text;
-                inputBox.value = extractCommitMessage(response);
+
+        while (true) {
+            let entry = await pickNextApiKey(secrets, apiKeyMode);
+            if (!entry) {
+                if (apiKeyMode === "single" && singleFallback === "switch" && !usedFallbackKey) {
+                    usedFallbackKey = true;
+                    entry = await pickNextApiKey(secrets, "rotation");
+                }
+                if (!entry) {
+                    throw new Error(l10n("All API keys are unavailable"));
+                }
+            }
+
+            // Proactive balance pre-check (cookie-bound keys only)
+            if (getBalanceCheckEnabled() && entry.cookie) {
+                const sufficient = await isKeyBalanceSufficient(entry.cookie);
+                if (!sufficient) {
+                    await markApiKeyExhausted(secrets, entry.value, "balance");
+                    logger.warn("commit.key.rotation", { key: entry.value.slice(0, 6) + "****", reason: "balance_check" });
+                    continue; // try next key
+                }
+            }
+
+            const apiInstance = apiMode === "anthropic"
+                ? new AnthropicApi(modelId)
+                : apiMode === "responses"
+                    ? new ResponsesApi(modelId)
+                    : new OpenaiApi(modelId);
+
+            commitGenerationAbortController = new AbortController();
+            try {
+                const stream = apiInstance.createMessage(selectedModel, systemPrompt, messages, baseUrl, entry.value, commitGenerationAbortController.signal);
+
+                response = "";
+                for await (const chunk of stream) {
+                    commitGenerationAbortController.signal.throwIfAborted();
+                    if (chunk.type === "text") {
+                        response += chunk.text;
+                        inputBox.value = extractCommitMessage(response);
+                    }
+                }
+                break; // success
+            } catch (err) {
+                // User cancellation → stop immediately
+                if (commitGenerationAbortController.signal.aborted) {
+                    throw err;
+                }
+                // If partial output already written to the InputBox, do NOT switch
+                // keys (avoid overwriting half-written content) — just fail.
+                if (response.length > 0) {
+                    throw err;
+                }
+                if (isKeyRotationError(err)) {
+                    await markApiKeyExhausted(secrets, entry.value, "api_error");
+                    logger.warn("commit.key.rotation", {
+                        key: entry.value.slice(0, 6) + "****",
+                        error: err instanceof Error ? err.message : String(err),
+                    });
+                    continue; // try next key
+                }
+                throw err; // non-rotation error
             }
         }
 
