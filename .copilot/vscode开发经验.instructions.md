@@ -23,6 +23,7 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 | **iframe 内元素** | reCAPTCHA 验证框、部分对话框在 iframe 内，快照里可见但需用户手动交互（如"选择包含小轿车的图片"） |
 | **文件上传** | 优先用 `page.setInputFiles('input[type=file]', '绝对路径')` 直接设文件（如市场上传 VSIX）。GitHub Release 附件用 `waitForEvent('filechooser')` + `chooser.setFiles()` |
 | **上传后状态** | 市场上传后显示 `Verifying <版本>`，需等待审核（通常数小时）；reCAPTCHA 验证通过后上传自动继续 |
+| **reCAPTCHA 依赖 google.com 可达性** | 市场上传的 reCAPTCHA 验证需要访问 `www.google.com/recaptcha/...`。**中国大陆网络无法直接访问 google.com**，会报 `无法连接到 reCAPTCHA 服务` / `net::ERR_ABORTED` / `ERR_BLOCKED_BY_ORB`（console 另见 CSP `connect-src` 拦截，均指向 google.com 不可达）。此时**内置浏览器刷新无效**，需：① 开代理后重试，或 ② 直接用外部浏览器（Chrome/Edge，已配代理插件）手动上传 |
 
 ### 1.2 VS Code 市场（Marketplace）上传流程
 
@@ -33,6 +34,8 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 5. 列表显示 `Verifying <新版本>` → 等待审核通过
 
 > ✅ **已验证（2026-08-09）：市场登录页点 "使用 GitHub 登录" 会自动登录，无需再输凭据**——Microsoft 登录页（`login.microsoftonline.com`，URL 带 `githubsi=true`）有 `使用 GitHub 登录` 按钮，点击后若该 GitHub 账号已绑定 Microsoft 账号（如 `azhe-hjm@outlook.com`），会直接进入"保持登录状态?"确认页 → 点"是"即登录成功，跳转管理页。**与浏览器自动化 1.1 的"登录态不跨页面共享"不同**：GitHub（github.com）与市场（marketplace.visualstudio.com）在同一浏览器会话内登录态**共享**，GitHub 登录后市场无需再次登录。但新开浏览器页/新会话仍可能要求重新登录。
+
+> ⚠️ **教训（2026-08-10 v1.6.3）**：市场上传的 reCAPTCHA 验证**必须能访问 google.com**。中国大陆网络下内置浏览器会报"无法连接到 reCAPTCHA 服务"（`google.com/recaptcha/api2/clr` 被 CSP `connect-src` 拦截 + `ERR_ABORTED`/`ERR_BLOCKED_BY_ORB`），**刷新无效**。此时应**改用外部浏览器（Chrome/Edge，配代理插件）手动上传**，或开代理后重试内置浏览器。
 
 > ⚠️ **关键教训**：vsix 打包必须**包含 dependencies**！用 `npx vsce package`（**不要加 `--no-dependencies`**），否则插件装不上 node_modules，用户激活直接崩溃（报"命令未找到"）。打包后务必 `npx vsce ls` 确认 `node_modules/` 在包内。
 
