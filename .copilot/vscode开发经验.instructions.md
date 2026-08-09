@@ -18,7 +18,7 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 | 要点 | 说明 |
 |------|------|
 | **登录页需用户手动** | 涉及账号密码（GitHub / Microsoft）的登录**必须由用户亲自完成**，Copilot 不能代输密码（安全红线）。Copilot 打开页面后，提示用户登录，登录完再继续 |
-| **登录态不跨页面共享** | 每次 `open_browser_page` 新开的浏览器页**不保留**之前的登录 cookie。切换页面（如市场→GitHub）需要重新登录 |
+| **登录态不跨页面共享** | 每次 `open_browser_page` 新开的浏览器页**不保留**之前的登录 cookie。切换页面（如市场→GitHub）需要重新登录。**例外（已验证 2026-08-09）**：同一会话内 GitHub 与市场登录态共享，市场页点"使用 GitHub 登录"可直接登录（见 1.2） |
 | **元素点击超时** | 微软/谷歌系页面（marketplace、reCAPTCHA）的按钮常因动画/iframe 导致 `click_element` 超时。**解决方案**：用 `run_playwright_code` + `page.evaluate(() => btn.click())` 强制触发 JS 点击 |
 | **iframe 内元素** | reCAPTCHA 验证框、部分对话框在 iframe 内，快照里可见但需用户手动交互（如"选择包含小轿车的图片"） |
 | **文件上传** | 优先用 `page.setInputFiles('input[type=file]', '绝对路径')` 直接设文件（如市场上传 VSIX）。GitHub Release 附件用 `waitForEvent('filechooser')` + `chooser.setFiles()` |
@@ -31,6 +31,8 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 3. 上传对话框出现：`page.setInputFiles('#file-upload', 'xxx.vsix')`
 4. 点击 **Upload** → 出现 reCAPTCHA 验证（**需用户手动完成**）→ 验证后自动上传
 5. 列表显示 `Verifying <新版本>` → 等待审核通过
+
+> ✅ **已验证（2026-08-09）：市场登录页点 "使用 GitHub 登录" 会自动登录，无需再输凭据**——Microsoft 登录页（`login.microsoftonline.com`，URL 带 `githubsi=true`）有 `使用 GitHub 登录` 按钮，点击后若该 GitHub 账号已绑定 Microsoft 账号（如 `azhe-hjm@outlook.com`），会直接进入"保持登录状态?"确认页 → 点"是"即登录成功，跳转管理页。**与浏览器自动化 1.1 的"登录态不跨页面共享"不同**：GitHub（github.com）与市场（marketplace.visualstudio.com）在同一浏览器会话内登录态**共享**，GitHub 登录后市场无需再次登录。但新开浏览器页/新会话仍可能要求重新登录。
 
 > ⚠️ **关键教训**：vsix 打包必须**包含 dependencies**！用 `npx vsce package`（**不要加 `--no-dependencies`**），否则插件装不上 node_modules，用户激活直接崩溃（报"命令未找到"）。打包后务必 `npx vsce ls` 确认 `node_modules/` 在包内。
 
