@@ -251,7 +251,9 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
             }
         }
         if (um?.top_p !== undefined && um.top_p !== null) {
-            rb.top_p = um.top_p;
+            if (um.supportsTemperature !== false) {
+                rb.top_p = um.top_p;
+            }
         }
 
         // max_output_tokens

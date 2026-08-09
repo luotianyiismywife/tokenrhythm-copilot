@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.6.1",
+	"version": "1.6.2",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -314,6 +314,23 @@
 				"tokenrhythm.visionProxyModel": {
 					"type": "string",
 					"default": "kimi-k2.6",
+					"enum": [
+						"kimi-k2.5",
+						"kimi-k2.6",
+						"kimi-k2.7-code",
+						"qwen3.8-max",
+						"seed-2.1-turbo",
+						"seed-2.1-pro"
+					],
+					"enumDescriptions": [
+						"%config.visionProxyModel.enum.kimi-k2.5.desc%",
+						"%config.visionProxyModel.enum.kimi-k2.6.desc%",
+						"%config.visionProxyModel.enum.kimi-k2.7-code.desc%",
+						"%config.visionProxyModel.enum.qwen3.8-max.desc%",
+						"%config.visionProxyModel.enum.seed-2.1-turbo.desc%",
+						"%config.visionProxyModel.enum.seed-2.1-pro.desc%"
+					],
+					"editPresentation": "multilineText",
 					"description": "%config.visionProxyModel.desc%"
 				},
 				"tokenrhythm.visionProxyThinking": {

@@ -116,6 +116,16 @@ export function activate(context: vscode.ExtensionContext) {
             const primary = await getPrimaryApiKey(context.secrets);
             const visionIds = primary ? await getVisionSupportedModelIds(primary.value) : new Set<string>();
 
+            // Capability descriptions matching the settings-page enum descriptions.
+            const VISION_MODEL_DESC: Record<string, string> = {
+                "kimi-k2.5": l10n("Kimi K2.5 — vision-capable"),
+                "kimi-k2.6": l10n("Kimi K2.6 — vision-capable (default)"),
+                "kimi-k2.7-code": l10n("Kimi K2.7 Code — vision-capable, no temperature/top_p"),
+                "qwen3.8-max": l10n("Qwen3.8 Max — text + image input, 1M context"),
+                "seed-2.1-turbo": l10n("Seed 2.1 Turbo — vision-capable"),
+                "seed-2.1-pro": l10n("Seed 2.1 Pro — vision-capable"),
+            };
+
             interface VisionPick extends vscode.QuickPickItem {
                 modelId?: string;
             }
@@ -124,7 +134,10 @@ export function activate(context: vscode.ExtensionContext) {
                 items.push(
                     ...[...visionIds].sort().map((id) => ({
                         label: id,
-                        description: id === current ? `$(check) ${l10n("Current")}` : undefined,
+                        description: [
+                            VISION_MODEL_DESC[id] ?? undefined,
+                            id === current ? `$(check) ${l10n("Current")}` : undefined,
+                        ].filter(Boolean).join("  ·  "),
                         modelId: id,
                     }))
                 );

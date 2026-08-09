@@ -1134,7 +1134,9 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                         }
                     }
                     if (params.um?.top_p !== undefined && params.um.top_p !== null) {
-                        body.top_p = params.um.top_p;
+                        if (params.um.supportsTemperature !== false) {
+                            body.top_p = params.um.top_p;
+                        }
                     }
                     if (params.um?.enable_thinking === true) {
                         if (params.um?.reasoning_effort && params.um.reasoning_effort !== "adaptive") {
@@ -1239,7 +1241,9 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                         }
                     }
                     if (params.um?.top_p !== undefined && params.um.top_p !== null) {
-                        body.top_p = params.um.top_p;
+                        if (params.um.supportsTemperature !== false) {
+                            body.top_p = params.um.top_p;
+                        }
                     }
                     if (params.um?.max_completion_tokens !== undefined) {
                         body.max_completion_tokens = params.um.max_completion_tokens;

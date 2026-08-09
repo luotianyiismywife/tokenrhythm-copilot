@@ -1,5 +1,16 @@
 # 更新日志（Changelog）
 
+## v1.6.2 (2026-08-09)
+
+### 视觉代理模型设置增强
+
+- **设置页下拉选择**：`tokenrhythm.visionProxyModel` 设置项改为静态下拉（6 个已知视觉模型：`kimi-k2.5` / `kimi-k2.6` / `kimi-k2.7-code` / `qwen3.8-max` / `seed-2.1-turbo` / `seed-2.1-pro`，各带能力描述），无需手填模型 ID。描述注明**以命令面板动态选择为准**（新发布的视觉模型可在 `TokenRhythm: 选择视觉代理模型` 命令中实时加载）。
+- **命令面板能力描述**：`TokenRhythm: 选择视觉代理模型` QuickPick 与设置页一致显示各模型能力（如 `kimi-k2.7-code` 标注"支持视觉，不支持 temperature/top_p"）。
+
+### 温度参数防御性加固
+
+- **top_p 保护**：补齐 5 处请求体构建点（OpenAI / Anthropic / Responses 的 `prepareRequestBody` + provider 视觉代理多轮 ×2）的 `supportsTemperature` 检查——`supportsTemperature=false` 的模型（如 `kimi-k2.7-code`）不再可能发送 `top_p`，与 `temperature` 行为一致，杜绝参数泄露导致的 400。已实测三协议端口 + 编译产物静态验证（5/5 全保护）。
+
 ## v1.6.1 (2026-08-09)
 
 ### 视觉代理模型动态选择

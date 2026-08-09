@@ -283,7 +283,9 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 
 			// Add top_p if configured
 			if (um?.top_p !== undefined && um.top_p !== null) {
-				rb.top_p = um.top_p;
+				if (um.supportsTemperature !== false) {
+					rb.top_p = um.top_p;
+				}
 			}
 		}
 

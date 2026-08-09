@@ -251,7 +251,9 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
 
         // top_p
         if (um?.top_p !== undefined && um.top_p !== null) {
-            rb.top_p = um.top_p;
+            if (um.supportsTemperature !== false) {
+                rb.top_p = um.top_p;
+            }
         }
 
         // max_tokens / max_completion_tokens (mutually exclusive)
