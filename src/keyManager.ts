@@ -442,6 +442,51 @@ export async function addApiKey(secrets: vscode.SecretStorage, entry: ApiKeyEntr
     return true;
 }
 
+/**
+ * 批量添加多个 API Key（三元组：cookie / key / 备注）。
+ * 已有重复 key **不跳过**，转为更新其 cookie（补全缺失的 cookie，且新 cookie 覆盖旧的）。
+ * 返回新增数量与更新数量。
+ */
+export async function addApiKeys(
+    secrets: vscode.SecretStorage,
+    entries: { value: string; label?: string; cookie?: string }[]
+): Promise<{ added: number; updated: number }> {
+    const store = await getApiKeyStore(secrets);
+    let added = 0;
+    let updated = 0;
+
+    for (const entry of entries) {
+        const value = entry.value?.trim();
+        if (!value) {
+            continue;
+        }
+        const cookie = entry.cookie?.trim() || undefined;
+        const label = entry.label?.trim() || undefined;
+
+        const existing = store.keys.find((k) => k.value === value);
+        if (existing) {
+            // 已存在 → 更新 cookie（补全或覆盖），不重复添加
+            if (cookie && existing.cookie !== cookie) {
+                existing.cookie = cookie;
+                updated++;
+            }
+            continue;
+        }
+        store.keys.push({
+            value,
+            label,
+            cookie,
+            available: null,
+        });
+        added++;
+    }
+
+    if (added > 0 || updated > 0) {
+        await saveApiKeyStore(secrets, store);
+    }
+    return { added, updated };
+}
+
 /** 删除 key；自动修正 activeIndex 与轮询游标 */
 export async function removeApiKey(secrets: vscode.SecretStorage, index: number): Promise<void> {
     const store = await getApiKeyStore(secrets);
@@ -476,6 +521,39 @@ export async function setKeyCookie(secrets: vscode.SecretStorage, index: number,
     }
     store.keys[index].cookie = cookie ? cookie.trim() : undefined;
     await saveApiKeyStore(secrets, store);
+}
+
+/**
+ * 编辑指定 key 的三个字段（key 值 / cookie / 备注）。
+ * 修改 key 值时会校验不与其它已存在 key 冲突。
+ * 仅更新调用方提供的字段（undefined 表示不修改）。
+ */
+export async function updateApiKey(
+    secrets: vscode.SecretStorage,
+    index: number,
+    fields: { value?: string; label?: string; cookie?: string }
+): Promise<{ ok: boolean; conflict?: boolean }> {
+    const store = await getApiKeyStore(secrets);
+    if (index < 0 || index >= store.keys.length) {
+        return { ok: false };
+    }
+    const entry = store.keys[index];
+
+    if (fields.value !== undefined && fields.value.trim()) {
+        const newValue = fields.value.trim();
+        if (newValue !== entry.value && store.keys.some((k) => k.value === newValue)) {
+            return { ok: false, conflict: true }; // 与其他 key 冲突
+        }
+        entry.value = newValue;
+    }
+    if (fields.label !== undefined) {
+        entry.label = fields.label.trim() || undefined;
+    }
+    if (fields.cookie !== undefined) {
+        entry.cookie = fields.cookie.trim() || undefined;
+    }
+    await saveApiKeyStore(secrets, store);
+    return { ok: true };
 }
 
 // ---------------------------------------------------------------------------

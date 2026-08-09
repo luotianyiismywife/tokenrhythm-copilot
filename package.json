@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.6.2",
+	"version": "1.6.3",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
