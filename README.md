@@ -56,7 +56,9 @@ You can also configure `tokenrhythm.temperature` and `tokenrhythm.top_p` directl
 
 This extension adds **extended vision understanding** capability to **text-only models** that do not natively support vision. When you send a message with an image to these models, they can call a vision-capable model to describe the image, and then answer based on that description.
 
-You can configure the default vision model and whether to enable thinking when describing images. By default, Kimi K2.6 is used to describe images.
+You can configure the default vision model and whether to enable thinking when describing images. By default, Kimi K2.6 is used to describe images. You can also pick a vision model from a dynamic list (models reported as `supports_vision=true` from `/v1/models`, e.g. `kimi-k2.5` / `kimi-k2.6` / `kimi-k2.7-code` / `qwen3.8-max` / `seed-2.1-turbo` / `seed-2.1-pro`) via the **`TokenRhythm: Select Vision Proxy Model`** command instead of typing the ID by hand. Falls back to manual input when the API is unavailable.
+
+> **Scope note — how images reach the vision proxy**: the `ask_image` proxy applies to images **you paste/attach manually into the chat** (the extension declares `imageInput: true` so VS Code forwards image data to it, and non-vision models delegate to the vision proxy model). It does **not** apply to screenshots taken by VS Code's **built-in screenshot tool** (e.g. in agent mode) — screenshot analysis is handled internally by the Copilot Chat framework using GitHub Copilot's own vision models, which is outside a third-party provider's control. If your Copilot plan's vision model is unavailable, the built-in screenshot tool reports "vision model query unavailable"; this does **not** affect manual image pasting, which still works through the extension's proxy.
 
 ### Model List
 
@@ -183,7 +185,9 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 本插件为**不支持视觉理解**的**纯文本模型**添加了**扩展视觉理解**功能，当你向这些模型发送带有图片的信息时，他们可以调用支持视觉理解的模型为图片输出描述，然后再回答。
 
-通过配置文件可更改默认使用的模型以及是否在描述图片时启用思考。默认情况下，将使用 Kimi K2.6 描述图片。
+通过配置文件可更改默认使用的模型以及是否在描述图片时启用思考。默认情况下，将使用 Kimi K2.6 描述图片。也可以通过 **`TokenRhythm: 选择视觉代理模型`** 命令从动态列表中挑选视觉模型（来自 `/v1/models` 中 `supports_vision=true` 的模型，实测含 `kimi-k2.5` / `kimi-k2.6` / `kimi-k2.7-code` / `qwen3.8-max` / `seed-2.1-turbo` / `seed-2.1-pro`），无需手填模型 ID；API 不可用时回退为手动输入。
+
+> **适用范围说明 —— 图片如何到达视觉代理**：`ask_image` 代理作用于**你在聊天中手动粘贴/附带**的图片（扩展声明 `imageInput: true`，VS Code 会将图片数据传给扩展，非视觉模型再委托给视觉代理模型）。它**不覆盖** VS Code **内置截图工具**拍摄的截图（如 agent 模式下的截图）——截图分析由 Copilot Chat 框架内部使用 GitHub Copilot 自带的视觉模型完成，第三方提供商无法接管。如果你的 Copilot 套餐的视觉模型不可用，内置截图工具会提示"视觉模型查询暂不可用"；这**不影响**手动粘贴图片，后者仍会通过扩展的代理正常工作。
 
 ### 模型列表
 
