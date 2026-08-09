@@ -67,6 +67,9 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 ### 1.4b 发布检查清单（每次发布前）
 
 ```bash
+# 0. 同步仓库（必须先做！）：提交并推送所有源码/文档改动，避免 tag/release 指向不完整代码
+git status --short            # 确认无未提交改动（.copilot/build-log.md 例外，脚本自动生成不入库）
+git add <改动的文件> && git commit -m "..." && git push origin main
 # 1. 确认版本号未被占用（对比 package.json version 与最新 tag）
 git tag -l "v*" | Sort-Object -Descending | Select-Object -First 3
 # 2. 检查远端是否已有同名 tag（本地可能滞后）
@@ -75,10 +78,14 @@ git ls-remote --tags origin | Select-String "<version>"
 npm run compile
 npx vsce package -o tokenrhythm-copilot-<version>.vsix
 npx vsce ls   # 确认 node_modules/ 与 out/ 齐全
-# 4. 发布（浏览器流程）
+# 4. 打 tag 并推送（确保 tag 指向含完整实现的提交）
+git tag v<version> && git push origin v<version>
+# 5. 发布（浏览器流程）
 #    - GitHub: releases/new?tag=vX.Y.Z，附件用 tokenrhythm-copilot-<version>.vsix
 #    - 市场: 上传 tokenrhythm-copilot-<version>.vsix
 ```
+
+> ⚠️ **教训（2026-08-09 v1.6.1）**：曾只提交 `package.json`+`CHANGELOG.md` 就 push tag，导致 tag 指向不含实现源码的提交（`src/extension.ts` 等 6 个文件漏提交）。**必须先 `git status` 确认所有源码已提交**，再打 tag 发布。
 
 ### 1.5 常见问题排查
 
