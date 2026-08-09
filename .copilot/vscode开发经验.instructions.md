@@ -48,14 +48,44 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
    > ⚠️ **注意**：vsix 不能拖进正文编辑器（GitHub 不支持该类型作为正文附件），必须走**二进制附件区**。
 4. 点击 **Publish release**
 
-### 1.4 常见问题排查
+### 1.4 版本号与发布命名规则（重要）
+
+> **历史教训（2026-08-09）**：曾打包为 `extension.vsix`（vsce 默认输出名），但正确的发布产物命名必须是 **`<扩展名>-<版本号>.vsix`**（如 `tokenrhythm-copilot-1.6.0.vsix`），否则与历史 release 下载链接的附件名不一致。
+
+| 项目 | 规则 |
+|------|------|
+| **打包输出名** | 固定为 **`<name>-<version>.vsix`**（如 `tokenrhythm-copilot-1.6.0.vsix`）：`npx vsce package -o tokenrhythm-copilot-<version>.vsix`。**不要用 vsce 默认的 `extension.vsix`** |
+| **name/version 来源** | `package.json` 的 `name` 字段（`tokenrhythm-copilot`）+ `version` 字段（如 `1.6.0`） |
+| **GitHub Release 附件** | 上传 `<name>-<version>.vsix`，下载链接即 `.../releases/download/<tag>/<name>-<version>.vsix` |
+| **tag 格式** | `vX.Y.Z`（如 `v1.6.0`），指向对应版本提交 |
+| **版本号语义** | 功能新增 → bump minor（1.5.0 → 1.6.0）；bugfix → bump patch；不向后兼容 → bump major |
+| **版本号占用检查** | 打包/发布前必须确认：`git tag -l "v*"` 看最新 tag，**不能在已发布的 tag 上重复发布同版本**（市场拒绝同版本重复上传；GitHub Release 可覆盖但不应依赖） |
+| **发布后产物位置** | 本地根目录 `<name>-<version>.vsix`（`.gitignore` 已忽略，不入库）；release 附件由浏览器流程上传 |
+
+### 1.4b 发布检查清单（每次发布前）
+
+```bash
+# 1. 确认版本号未被占用（对比 package.json version 与最新 tag）
+git tag -l "v*" | Sort-Object -Descending | Select-Object -First 3
+# 2. 检查远端是否已有同名 tag（本地可能滞后）
+git ls-remote --tags origin | Select-String "<version>"
+# 3. 打包并验证内容（输出名必须为 <name>-<version>.vsix）
+npm run compile
+npx vsce package -o tokenrhythm-copilot-<version>.vsix
+npx vsce ls   # 确认 node_modules/ 与 out/ 齐全
+# 4. 发布（浏览器流程）
+#    - GitHub: releases/new?tag=vX.Y.Z，附件用 tokenrhythm-copilot-<version>.vsix
+#    - 市场: 上传 tokenrhythm-copilot-<version>.vsix
+```
+
+### 1.5 常见问题排查
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
 | 点击无反应/超时 | 微软系页面按钮事件绑定在 React 上 | `page.evaluate(() => 元素.click())` |
 | 找不到元素 | 快照 ref 过期（页面已变） | 重新 `read_page` 获取新 ref |
 | reCAPTCHA 卡住 | 反机器人验证必须真人操作 | 提示用户在 iframe 中完成图片验证 |
-| 上传失败 | vsix 缺依赖 / 版本号冲突 | 检查 `vsce ls`；市场不能重复上传同版本 |
+| 上传失败 | vsix 缺依赖 / 版本号冲突 / 附件名不符合规则 | 检查 `vsce ls`；市场不能重复上传同版本；附件名必须是 `<name>-<version>.vsix`（见 1.4） |
 
 ---
 
