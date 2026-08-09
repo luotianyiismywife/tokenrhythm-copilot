@@ -49,7 +49,7 @@
 | **请求延迟** | 可配置的请求间隔延迟，避免触发 API 限流 |
 | **超时控制** | 可配置的请求超时时间（默认 10 分钟） |
 | **立即取消** | 取消请求时通过 `reader.cancel()` 立即中断流式读取，停止后台接收 |
-| **视觉代理配置** | 支持通过设置 `tokenrhythm.visionProxyModel`、`tokenrhythm.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`tokenrhythm.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="disabled"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }` |
+| **视觉代理配置** | 支持通过设置 `tokenrhythm.visionProxyModel`、`tokenrhythm.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`tokenrhythm.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="disabled"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉代理模型动态选择**：`tokenrhythm.setVisionProxyModel` 命令从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表（实测含 kimi-k2.5/k2.6/k2.7-code、qwen3.8-max、seed-2.1-turbo/pro），QuickPick 选择代替手填；API 不可用时回退手填 |
 | **安装欢迎页 (Walkthrough)** | 首次安装且未配置 API Key 时自动打开引导向导，指引用户设置 API Key 和打开语言模型管理器。包含 3 个步骤：设置 API Key、显示模型、高级设置。通过 `onStartupFinished` 激活事件确保在 VS Code 启动后立即检测 |
 
 ### 1.3 模型清单
@@ -876,6 +876,9 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 
 #### `getAnthropicSupportedModelIds(apiKey): Promise<Set<string>>`
 从缓存的 `/v1/models` 元数据中筛选 `supports_anthropic=true` 的模型 ID 集。供 `provideModel.ts` 在启动时缓存为动态标记（`getAnthropicModelIds()`），由 provider 在 auto 模式下查询决定是否使用 Anthropic 协议。
+
+#### `getVisionSupportedModelIds(apiKey): Promise<Set<string>>`
+从缓存的 `/v1/models` 元数据中筛选 `supports_vision=true` 的模型 ID 集。供 `extension.ts` 的 `tokenrhythm.setVisionProxyModel` 命令动态加载视觉模型列表（QuickPick 选择代替手填）。
 
 #### `isApiFetchSuccessful(): boolean`
 返回最近一次 API 模型列表拉取是否成功。用于模型提供者决定是否应用 API 过滤。

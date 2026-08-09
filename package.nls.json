@@ -71,6 +71,7 @@
 
 	"command.setModelPreset": "Set Model Temperature Preset",
 	"command.manageApiKeys": "Manage API Keys",
+	"command.setVisionProxyModel": "Select Vision Proxy Model",
 
 	"walkthrough.title": "TokenRhythm for Copilot Chat",
 	"walkthrough.description": "Set up TokenRhythm models in Copilot Chat.",

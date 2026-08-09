@@ -71,6 +71,7 @@
 
 	"command.setModelPreset": "设置模型温度预设",
 	"command.manageApiKeys": "管理 API Keys",
+	"command.setVisionProxyModel": "选择视觉代理模型",
 
 	"walkthrough.title": "TokenRhythm for Copilot Chat",
 	"walkthrough.description": "在 Copilot Chat 中配置 TokenRhythm 模型。",

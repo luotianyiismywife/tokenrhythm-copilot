@@ -11,6 +11,7 @@ import {
     addApiKey,
     getApiKeyStore,
     getKeyDisplayStatus,
+    getPrimaryApiKey,
     getTransientExhaustedInfo,
     maskApiKey,
     maskCookie,
@@ -22,6 +23,7 @@ import {
     type ApiKeyEntry,
 } from "./keyManager";
 import { testKeyAvailability } from "./balanceCheck";
+import { getVisionSupportedModelIds } from "./apiModelList";
 
 // ---- Walkthrough / Welcome constants ----
 
@@ -101,6 +103,64 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand("tokenrhythm.manageApiKeys", async () => {
             await showApiKeyManager(context);
+        })
+    );
+
+    // Vision proxy model picker: dynamically loads vision-capable models from
+    // /v1/models (supports_vision=true) so the user can pick instead of typing
+    // the model ID by hand. Falls back to manual input when the API is unavailable.
+    context.subscriptions.push(
+        vscode.commands.registerCommand("tokenrhythm.setVisionProxyModel", async () => {
+            const config = vscode.workspace.getConfiguration();
+            const current = config.get<string>("tokenrhythm.visionProxyModel", "kimi-k2.6");
+            const primary = await getPrimaryApiKey(context.secrets);
+            const visionIds = primary ? await getVisionSupportedModelIds(primary.value) : new Set<string>();
+
+            interface VisionPick extends vscode.QuickPickItem {
+                modelId?: string;
+            }
+            const items: VisionPick[] = [];
+            if (visionIds.size > 0) {
+                items.push(
+                    ...[...visionIds].sort().map((id) => ({
+                        label: id,
+                        description: id === current ? `$(check) ${l10n("Current")}` : undefined,
+                        modelId: id,
+                    }))
+                );
+                items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
+            }
+            items.push({
+                label: `$(pencil) ${l10n("Custom (manual input)")}`,
+                description: current,
+            });
+
+            const picked = await vscode.window.showQuickPick(items, {
+                title: l10n("Select Vision Proxy Model"),
+                placeHolder: current,
+                ignoreFocusOut: true,
+            });
+            if (!picked) {
+                return;
+            }
+            let newModel = picked.modelId;
+            if (!newModel) {
+                // Custom: prompt for manual input
+                const entered = await vscode.window.showInputBox({
+                    title: l10n("Select Vision Proxy Model"),
+                    prompt: l10n("Enter the vision model ID"),
+                    value: current,
+                    ignoreFocusOut: true,
+                });
+                if (entered === undefined || !entered.trim()) {
+                    return;
+                }
+                newModel = entered.trim();
+            }
+            await config.update("tokenrhythm.visionProxyModel", newModel, vscode.ConfigurationTarget.Global);
+            vscode.window.showInformationMessage(
+                l10nFormat("Vision proxy model set to {0}", newModel)
+            );
         })
     );
 

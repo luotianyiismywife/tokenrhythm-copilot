@@ -101,6 +101,19 @@ export async function getAnthropicSupportedModelIds(apiKey: string | undefined):
 }
 
 /**
+ * Get the set of model IDs whose /v1/models entry reports supports_vision=true.
+ * These models can natively see images and are candidates for the vision proxy
+ * (ask_image tool). Used by the "setVisionProxyModel" command picker.
+ *
+ * @param apiKey - The API key for authentication.
+ * @returns A set of model IDs supporting vision input.
+ */
+export async function getVisionSupportedModelIds(apiKey: string | undefined): Promise<Set<string>> {
+    await ensureApiModelCache(apiKey);
+    return new Set((cachedModelMetadata ?? []).filter((m) => m.supports_vision === true).map((m) => m.id));
+}
+
+/**
  * Ensure the module-level model cache is populated (5-minute TTL, silent fallback).
  */
 async function ensureApiModelCache(apiKey: string | undefined): Promise<void> {
