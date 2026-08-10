@@ -1,5 +1,25 @@
 # 更新日志（Changelog）
 
+## v1.7.0 (2026-08-11)
+
+### 模型同步不再写工作区文件
+
+- **同步结果改为输出通道一行日志**：启动模型同步不再写入工作区 `.copilot/model-sync-log.md`（该文件会被 git 追踪并污染用户仓库，见 issue #1），改为以一行日志输出到「TokenRhythm」输出通道（`models.sync` 标签，含状态/说明）。已存在的 `model-sync-log.md` 可手动删除，后续不会再生。
+
+### DeepSeek thinking 模式多轮对话 400 修复
+
+- **reasoning_content 必须回传**：修复 OpenAI 兼容模式下 DeepSeek 等 thinking 模型多轮对话报 400（`The reasoning_content in the thinking mode must be passed back to the API`）。根因：VS Code 回传历史消息时**不包含** `LanguageModelThinkingPart`，导致转换后的 assistant 历史消息缺失 `reasoning_content` 字段；DeepSeek 要求 thinking 模式下每个 assistant 消息必须携带该字段（即使空字符串）。修复：`includeReasoningInRequest=true` 时始终设置 `reasoning_content`（有真实推理内容用内容，否则空字符串兜底），与代码注释中"even if empty string, DeepSeek requires round-tripping"的设计意图一致。
+
+### API Key 管理界面余额显示
+
+- **主界面与检测二级界面均显示余额**：「管理 API Keys」列表与「检测可用性」二级界面为每个绑定了 `tr_session` cookie 的 key 显示实时余额——余额高于阈值显示 `$(coin) ¥X.XX`，余额 ≤ `minBalanceCny`（默认 0，即余额 ≤ 0）显示 `$(error) ¥X.XX`（这类 key 在轮询模式下会被主动跳过），查询失败显示"余额未知"，未绑定 cookie 不显示余额。余额经 TTL 缓存查询，不会频繁请求接口。
+- **余额不足提示使用实际阈值**：检测可用性时"余额不足"提示改用 `getMinBalanceCny()` 显示用户实际配置的阈值（原先硬编码为 0）。
+
+### 轮询余额预检增强
+
+- **预检返回余额值并记录日志**：`balanceCheck.ts` 新增 `checkKeyBalance(cookie)` 返回 `{ sufficient, balance? }`，聊天请求与 Git 提交生成两处轮换循环的余额预检均改用它，并在 `key.rotation` / `commit.key.rotation` 日志中记录具体余额值，便于排查 key 被跳过的原因。
+- **轮询跳过余额 ≤ 0 的 key**：默认 `minBalanceCny=0` 时，绑定了 cookie 且余额 ≤ 0（含 0 与负数）的 key 在轮询时会被主动预检跳过，避免发请求后收到 402 才被动切换。
+
 ## v1.6.2 (2026-08-09)
 
 ### 视觉代理模型设置增强

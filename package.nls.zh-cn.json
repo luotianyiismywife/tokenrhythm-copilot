@@ -37,7 +37,7 @@
 	"config.temperature.desc": "模型温度 (0.0 - 2.0)。与「tokenrhythm.top_p」配对使用。仅在「tokenrhythm.modelPreset」设为「custom」时生效。",
 	"config.top_p.desc": "模型 top_p (0.0 - 1.0)。与「tokenrhythm.temperature」配对使用。仅在「tokenrhythm.modelPreset」设为「custom」时生效。",
 	"config.enableAutoModelDiscovery.desc": "启用自动模型发现。开启后，扩展将从 API 获取模型列表，过滤模型选择器仅显示服务器上可用的模型。不在 API 列表中的模型将被隐藏。服务器上存在但内置列表中没有的新模型将自动添加，并使用 models.dev 元数据推断能力——支持推理的模型带思考开关（可切换），不支持推理的模型思考常开。关闭后可看到所有内置模型，不受 API 可用性影响。",
-	"config.syncModelsOnStartup.desc": "启动时自动检查是否有新的 TokenRhythm 模型（每日最多一次）。每次同步事件记录在工作区的 `.copilot/model-sync-log.md` 文件中（无工作区时回退到扩展的全局存储目录）。默认: 开启。",
+	"config.syncModelsOnStartup.desc": "启动时自动检查是否有新的 TokenRhythm 模型（每日最多一次）。同步结果以一行日志输出到「TokenRhythm」输出通道。默认: 开启。",
 	"config.maxInputTokensRatio.desc": "每个模型声明为 maxInputTokens 的真实上下文窗口比例（0.1 - 1.0，默认 1.0）。VS Code 的 agent 自动压缩约在声明的 maxInputTokens 的 90% 处触发。**建议设为 0.8** —— 可使压缩在真实窗口约 72% 处触发，防止 BYOK 大窗口模型（如 1M token）按完整窗口声明（1.0）时压缩永不触发导致上下文溢出。不影响 API 请求体中的 context_length（始终使用真实值）。",
 	"config.modelPresets.desc": "模型预设列表，可通过命令面板快速选择。每个预设包含温度（temperature）和 top_p 两个参数。你可以修改各预设的字段来自定义。",
 	"config.modelPreset.id.desc": "预设标识符（必须与 modelPreset 设置中的值一致）。",

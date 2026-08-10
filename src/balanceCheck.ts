@@ -116,17 +116,29 @@ export async function getBalanceCached(cookie: string, ttlSec: number): Promise<
 }
 
 /**
- * 判断 key 余额是否充足。
- * 余额 > minBalanceCny → true；查询失败（cookie 失效/网络）→ 返回 true（不阻塞请求，回退被动检测）。
+ * 检查 key 余额是否充足，并返回查询到的余额值（供日志 / 管理界面展示）。
+ *
+ * 判定：余额 > minBalanceCny → sufficient=true；查询失败（cookie 失效/网络）→ sufficient=true
+ * （不阻塞请求，回退被动检测——余额 ≤ 0 时 API 会返回 402 触发轮换）。
+ * @returns `{ sufficient, balance? }` —— balance 仅在查询成功时存在
  */
-export async function isKeyBalanceSufficient(cookie: string): Promise<boolean> {
+export async function checkKeyBalance(cookie: string): Promise<{ sufficient: boolean; balance?: number }> {
     const minBalance = getMinBalanceCny();
     const ttlSec = getBalanceCheckIntervalSec();
     const balance = await getBalanceCached(cookie, ttlSec);
     if (balance === undefined) {
-        return true; // 查询失败不阻塞
+        return { sufficient: true }; // 查询失败不阻塞
     }
-    return balance > minBalance;
+    return { sufficient: balance > minBalance, balance };
+}
+
+/**
+ * 判断 key 余额是否充足。
+ * 余额 > minBalanceCny → true；查询失败（cookie 失效/网络）→ 返回 true（不阻塞请求，回退被动检测）。
+ * 注意：默认 minBalanceCny=0 时，余额 ≤ 0（含 0 与负数）即视为不足 → 轮询时跳过该 key。
+ */
+export async function isKeyBalanceSufficient(cookie: string): Promise<boolean> {
+    return (await checkKeyBalance(cookie)).sufficient;
 }
 
 // ---------------------------------------------------------------------------

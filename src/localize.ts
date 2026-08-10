@@ -94,6 +94,7 @@ const zhCN: Record<string, string> = {
 	"Current": "当前使用",
 	"Cookie bound": "Cookie 已绑定",
 	"Cookie not bound": "未绑定 Cookie",
+	"Balance unknown": "余额未知",
 	"Add API Key": "添加 API Key",
 	"Import API Keys (batch)": "批量导入 API Keys",
 	"No entries yet — click below to add a triple": "暂无条目 — 点击下方添加三元组",

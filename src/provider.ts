@@ -44,7 +44,7 @@ import {
     maskApiKey,
     type ApiKeyEntry,
 } from "./keyManager";
-import { getBalanceCheckEnabled, isKeyBalanceSufficient } from "./balanceCheck";
+import { getBalanceCheckEnabled, checkKeyBalance } from "./balanceCheck";
 
 /**
  * Human-readable labels for key rotation failure reasons (keys are l10n keys).
@@ -415,15 +415,18 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                     }
                 }
 
-                // 2. Proactive balance pre-check (cookie-bound keys only)
+                // 2. Proactive balance pre-check (cookie-bound keys only).
+                //    Balance ≤ minBalanceCny (default 0) → skip this key and try
+                //    the next one. The balance value is logged for observability.
                 if (getBalanceCheckEnabled() && currentEntry.cookie) {
-                    const sufficient = await isKeyBalanceSufficient(currentEntry.cookie);
-                    if (!sufficient) {
+                    const check = await checkKeyBalance(currentEntry.cookie);
+                    if (!check.sufficient) {
                         failedKeys.set(currentEntry.value, "balance");
                         await markApiKeyExhausted(this.secrets, currentEntry.value, "balance");
                         logger.warn("key.rotation", {
                             key: maskApiKey(currentEntry.value),
                             reason: "balance_check",
+                            balance: check.balance,
                         });
                         continue; // try next key
                     }

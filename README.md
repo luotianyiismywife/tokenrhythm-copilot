@@ -126,7 +126,7 @@ Available in `settings.json`:
 | `tokenrhythm.visionProxyModel` | `kimi-k2.6` | Vision model used by the `ask_image` tool when the selected model does not support vision. |
 | `tokenrhythm.visionProxyThinking` | `false` | Enable thinking/reasoning in the vision proxy model when answering image queries. |
 | `tokenrhythm.enableAutoModelDiscovery` | `true` | Automatically fetch the live model list from `GET /v1/models` and hide models unavailable on your account. |
-| `tokenrhythm.syncModelsOnStartup` | `true` | Check for new TokenRhythm models on startup, at most once per day. Every sync event is recorded in the workspace `.copilot/model-sync-log.md` (falls back to the extension's global storage when no workspace folder is open). |
+| `tokenrhythm.syncModelsOnStartup` | `true` | Check for new TokenRhythm models on startup, at most once per day. Sync results are reported as a single line in the "TokenRhythm" Output channel. |
 | `tokenrhythm.maxInputTokensRatio` | `1.0` | Ratio of the real context window declared as `maxInputTokens` (0.1 - 1.0). VS Code's agent auto-compaction triggers at ~90% of the declared value. **Recommended: 0.8** so compaction fires at ~72% of the real window, preventing context overflow on large-window BYOK models. The `context_length` sent in API requests always uses the real value. |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | Show the advanced token counter in the status bar while using TokenRhythm models. |
 | `tokenrhythm.enableResponsesApi` | `false` | Use the Responses API protocol in `auto` mode for models detected as supports_responses=true at startup (from `GET /v1/models` — dynamic, no hardcoded model IDs). **Disabled by default**: the TokenRhythm Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, non-standard multi-round tool backfill), so models fall back to the more mature OpenAI-compatible format. Enable only to try the Responses protocol. |
@@ -270,7 +270,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `tokenrhythm.visionProxyModel` | `kimi-k2.6` | 用于 ask_image 工具的视觉模型 ID。当所选模型不支持视觉时，该模型用于回答图片相关问题。 |
 | `tokenrhythm.visionProxyThinking` | `false` | 在视觉代理模型回答图片查询时启用思考/推理功能。 |
 | `tokenrhythm.enableAutoModelDiscovery` | `true` | 自动从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。 |
-| `tokenrhythm.syncModelsOnStartup` | `true` | 启动时自动检查是否有新的 TokenRhythm 模型（每日最多一次）。每次同步事件记录在工作区的 `.copilot/model-sync-log.md` 文件中（无工作区时回退到扩展的全局存储目录）。 |
+| `tokenrhythm.syncModelsOnStartup` | `true` | 启动时自动检查是否有新的 TokenRhythm 模型（每日最多一次）。同步结果以一行日志输出到「TokenRhythm」输出通道。 |
 | `tokenrhythm.maxInputTokensRatio` | `1.0` | 每个模型声明为 `maxInputTokens` 的真实上下文窗口比例（0.1 - 1.0）。VS Code 的 agent 自动压缩约在声明的 maxInputTokens 的 90% 处触发。**建议设为 0.8** —— 可使压缩在真实窗口约 72% 处触发，防止 BYOK 大窗口模型上下文溢出。API 请求体中的 context_length 始终使用真实值。 |
 | `tokenrhythm.enableThirdPartyTokenIndicator` | `true` | 使用 TokenRhythm 模型时在状态栏显示高级 Token 计数器。 |
 | `tokenrhythm.enableResponsesApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_responses=true 的模型（来自 `GET /v1/models`——动态探测，不硬编码模型 ID）使用 Responses 协议。**默认关闭**：TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认回退到更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。 |

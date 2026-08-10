@@ -20,7 +20,7 @@ import {
     pickNextApiKey,
     type ApiKeyEntry,
 } from "../keyManager";
-import { getBalanceCheckEnabled, isKeyBalanceSufficient } from "../balanceCheck";
+import { getBalanceCheckEnabled, checkKeyBalance } from "../balanceCheck";
 
 /**
  * Git commit message generator module.
@@ -313,12 +313,17 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 }
             }
 
-            // Proactive balance pre-check (cookie-bound keys only)
+            // Proactive balance pre-check (cookie-bound keys only).
+            // Balance ≤ minBalanceCny (default 0) → skip this key and try the next.
             if (getBalanceCheckEnabled() && entry.cookie) {
-                const sufficient = await isKeyBalanceSufficient(entry.cookie);
-                if (!sufficient) {
+                const check = await checkKeyBalance(entry.cookie);
+                if (!check.sufficient) {
                     await markApiKeyExhausted(secrets, entry.value, "balance");
-                    logger.warn("commit.key.rotation", { key: entry.value.slice(0, 6) + "****", reason: "balance_check" });
+                    logger.warn("commit.key.rotation", {
+                        key: entry.value.slice(0, 6) + "****",
+                        reason: "balance_check",
+                        balance: check.balance,
+                    });
                     continue; // try next key
                 }
             }

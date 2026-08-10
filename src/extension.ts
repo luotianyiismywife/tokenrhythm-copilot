@@ -25,7 +25,7 @@ import {
     updateKeyAvailability,
     type ApiKeyEntry,
 } from "./keyManager";
-import { testKeyAvailability } from "./balanceCheck";
+import { testKeyAvailability, getBalanceCached, getBalanceCheckIntervalSec, getMinBalanceCny } from "./balanceCheck";
 import { getVisionSupportedModelIds } from "./apiModelList";
 
 // ---- Walkthrough / Welcome constants ----
@@ -322,8 +322,8 @@ export function activate(context: vscode.ExtensionContext) {
     showWelcomeIfNeeded(context);
 
     // Startup model sync — checks for new TokenRhythm models at most once per
-    // day and appends the event to .copilot/model-sync-log.md. Fire-and-forget:
-    // never blocks activation, all errors are handled internally.
+    // day and logs a single line to the "TokenRhythm" Output channel.
+    // Fire-and-forget: never blocks activation, all errors are handled internally.
     syncModelsOnStartup(context);
 
     // Dispose logger on deactivate
@@ -350,6 +350,16 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
         if (store.keys.length === 0) {
             items.push({ label: l10n("No API keys configured"), kind: vscode.QuickPickItemKind.Separator });
         } else {
+            // Fetch balances for cookie-bound keys (TTL-cached; query failure → undefined).
+            // The balance is shown per key so users can see which keys are low on funds
+            // and understand why rotation skips them.
+            const balances = await Promise.all(
+                store.keys.map((entry) =>
+                    entry.cookie
+                        ? getBalanceCached(entry.cookie, getBalanceCheckIntervalSec())
+                        : Promise.resolve(undefined)
+                )
+            );
             store.keys.forEach((entry, i) => {
                 const status = getKeyDisplayStatus(entry);
                 const transient = getTransientExhaustedInfo(entry.value);
@@ -366,8 +376,18 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     statusText = l10nFormat("Cooldown ({0}s)", String(transient.remainingSec));
                 }
                 const isActive = isSingleMode && i === store.activeIndex;
+                // Balance display: only meaningful when a cookie is bound. Balance ≤
+                // minBalanceCny is shown with an error icon — such keys are skipped in
+                // rotation mode (proactive pre-check). Query failure → "Balance unknown".
+                const balance = entry.cookie ? balances[i] : undefined;
+                const balanceText = balance !== undefined
+                    ? `${balance > getMinBalanceCny() ? "$(coin)" : "$(error)"} ¥${balance.toFixed(2)}`
+                    : entry.cookie
+                        ? `$(warning) ${l10n("Balance unknown")}`
+                        : "";
                 const detail = [
                     `${statusIcon} ${statusText}`,
+                    balanceText,
                     isActive ? `$(star) ${l10n("Current")}` : "",
                     entry.cookie ? `$(key) ${l10n("Cookie bound")}` : `$(key) ${l10n("Cookie not bound")}`,
                 ]
@@ -579,7 +599,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     await updateKeyAvailability(secrets, entry.value, false);
                     if (result.reason === "balance") {
                         vscode.window.showWarningMessage(
-                            l10nFormat("Key balance is insufficient (≤ {0} CNY)", String(0))
+                            l10nFormat("Key balance is insufficient (≤ {0} CNY)", String(getMinBalanceCny()))
                         );
                     } else {
                         vscode.window.showWarningMessage(l10n("Key is invalid (401)"));
@@ -597,6 +617,16 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             const store = await getApiKeyStore(secrets);
             const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
+            // Fetch balances for cookie-bound keys (TTL-cached) so the sub-menu
+            // shows each key's current balance alongside its availability status.
+            const balances = await Promise.all(
+                store.keys.map((entry) =>
+                    entry.cookie
+                        ? getBalanceCached(entry.cookie, getBalanceCheckIntervalSec())
+                        : Promise.resolve(undefined)
+                )
+            );
+
             // List all keys with their current status
             store.keys.forEach((entry, i) => {
                 const status = getKeyDisplayStatus(entry);
@@ -604,9 +634,16 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 if (status === "available") statusText = `$(check) ${l10n("Available")}`;
                 else if (status === "unavailable") statusText = `$(error) ${l10n("Unavailable")}`;
                 else if (status === "cooldown") statusText = `$(clock) ${l10n("Cooldown")}`;
+                const balance = entry.cookie ? balances[i] : undefined;
+                const balanceText = balance !== undefined
+                    ? `${balance > getMinBalanceCny() ? "$(coin)" : "$(error)"} ¥${balance.toFixed(2)}`
+                    : entry.cookie
+                        ? `$(warning) ${l10n("Balance unknown")}`
+                        : "";
+                const statusLine = statusText + (balanceText ? `  ·  ${balanceText}` : "");
                 items.push({
                     label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
-                    description: statusText,
+                    description: statusLine,
                     action: "checkOne",
                     index: i,
                 });

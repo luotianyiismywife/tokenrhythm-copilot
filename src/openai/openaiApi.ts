@@ -174,10 +174,17 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
                     assistantMessage.content = joinedText;
                 }
 
-                // Always set reasoning_content when includeReasoningInRequest is true
-                // and reasoning parts exist — even if empty string, DeepSeek requires
-                // round-tripping for context continuity across conversation turns.
-                if (modelConfig.includeReasoningInRequest && reasoningParts.length > 0) {
+                // Always set reasoning_content when includeReasoningInRequest is true.
+                // DeepSeek thinking mode requires the reasoning_content field to be
+                // present on EVERY assistant message for round-tripping — even an
+                // empty string satisfies the requirement. VS Code does NOT re-send
+                // LanguageModelThinkingPart in history messages, so reasoningParts is
+                // usually empty on later turns of a conversation; without the field,
+                // DeepSeek rejects the request with 400 ("reasoning_content ... must
+                // be passed back to the API"). Thinking is off only when the user
+                // disabled it (includeReasoningInRequest=false), so unconditional
+                // emission here is safe.
+                if (modelConfig.includeReasoningInRequest) {
                     assistantMessage.reasoning_content = joinedThinking;
                 }
 

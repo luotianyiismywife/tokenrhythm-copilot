@@ -27,10 +27,10 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
-| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `tokenrhythm.apiKeys`），两种模式：`rotation`（默认，轮询使用、跳过不可用 key）/ `single`（仅用当前 key；不可用时按 `tokenrhythm.singleKeyFallback` 设置报错或自动切换并弹窗提示）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`tokenrhythm.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 cookie/key/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因，并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）。旧版单 key `tokenrhythm.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `tokenrhythm.apiKeys`），两种模式：`rotation`（默认，轮询使用、跳过不可用 key）/ `single`（仅用当前 key；不可用时按 `tokenrhythm.singleKeyFallback` 设置报错或自动切换并弹窗提示）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`tokenrhythm.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 cookie/key/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**管理主界面与检测二级界面均显示每个 key 的余额**（绑定 cookie 时经 `getBalanceCached` TTL 缓存查询：余额 > `minBalanceCny` 显示 `$(coin) ¥X.XX`，余额 ≤ `minBalanceCny` 显示 `$(error) ¥X.XX` 即轮询会被跳过的 key，查询失败显示 `$(warning) 余额未知`，未绑定 cookie 不显示余额）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因，并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）。旧版单 key `tokenrhythm.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
 | **多模型支持** | 内置 14 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `tokenrhythm.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
-| **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步事件追加记录到工作区 `.copilot/model-sync-log.md`（无工作区时回退到扩展全局存储目录），事件含时间/结果/发现的新模型列表。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
+| **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「TokenRhythm」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
 | **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持协议的模型自动生效）。**auto 模式优先级**：`enableResponsesApi`（默认关闭）→ `enableAnthropicApi`（默认关闭）→ 兜底 OpenAI。默认关闭原因：① TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规）；② **Anthropic 格式对部分模型存在兼容性 bug**（如 DeepSeek 系列强制思考 + temperature/top_p → 400"请求参数组合无效"，2026-08-06 实测，插件已修复仅强制思考时跳过温度）。**建议默认使用更成熟的 OpenAI 兼容格式** |
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
@@ -143,7 +143,7 @@ activate(context)
   │   ├── tokenrhythm.abortGitCommitMessage    ← 中止生成
   │   └── tokenrhythm.setModelPreset           ← 设置模型预设
   ├── showWelcomeIfNeeded()                 ← 首次安装时显示欢迎向导
-  ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，记录到 .copilot/model-sync-log.md）
+  ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，结果以一行日志输出）
   └── 注册 dispose 清理
 ```
 
@@ -204,8 +204,8 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │       │   ├── single → active key；不可用且 singleKeyFallback=switch → 降级 rotation + 弹窗提示
   │       │   └── 全部不可用 → 报错 "所有 API Key 均不可用"
   │       ├── 主动余额预检（balanceCheckEnabled 且有 cookie）:
-  │       │   ├── isKeyBalanceSufficient(cookie) → 按 cookie 粒度查 /api/usage-summary（TTL 缓存）
-  │       │   ├── 余额 ≤ minBalanceCny → markApiKeyExhausted(balance) + continue 换下一个 key
+  │       │   ├── checkKeyBalance(cookie) → 按 cookie 粒度查 /api/usage-summary（TTL 缓存），返回余额值供日志记录
+  │       │   ├── 余额 ≤ minBalanceCny（默认 0，即余额 ≤ 0 视为不足）→ markApiKeyExhausted(balance) + continue 换下一个 key
   │       │   └── 曾标记不可用但余额恢复 → markApiKeyAvailable（自愈）
   │       ├── 用当前 key 构造 requestHeaders → _executeApiRequest()（见步骤 10 协议分发）
   │       ├── 成功 → break 循环；曾不可用 → 自愈置可用
@@ -302,6 +302,13 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   2. 每 100ms 定时刷新 → LanguageModelThinkingPart
   3. XML think 块 (꽁...꽁) → processXmlThinkBlocks()
   4. 文本内容出现时 → reportEndThinking()
+
+回传机制 (OpenAI 模式 convertMessages):
+  - includeReasoningInRequest=true 时，assistant 消息**始终**设置 reasoning_content
+    （有真实推理内容用内容，否则空字符串兜底）——DeepSeek thinking 模式要求每个
+    assistant 消息必须携带该字段；VS Code 回传历史时不含 LanguageModelThinkingPart，
+    缺失字段会 400（"The reasoning_content in the thinking mode must be passed
+    back to the API"，2026-08-11 实测）
 ```
 
 ### 2.5 工具调用处理
@@ -416,7 +423,7 @@ src/
 ├── logger.ts                             # 日志系统
 ├── models.ts                             # 内置模型定义清单
 ├── modelsDev.ts                          # models.dev 元数据拉取与查询
-├── modelSync.ts                          # 启动模型同步（每日一次，记录到 .copilot/model-sync-log.md）
+├── modelSync.ts                          # 启动模型同步（每日一次，结果以一行日志输出到 Output 通道）
 ├── provideModel.ts                       # 模型信息提供函数（含自动发现）
 ├── provider.ts                           # Chat 模型提供商 (核心主文件，含多 key 轮换循环)
 ├── provideToken.ts                       # Token 计数函数
@@ -468,23 +475,22 @@ test/
 └── README.md                            # 测试说明与平台差异记录（含 Responses 扁平化问题）
 
 .copilot/
-├── build-log.md                        # 编译日志（每次 npm run compile 由 build-info.mjs 追加，含版本号+时区）
-└── model-sync-log.md                    # 启动模型同步日志（扩展自动追加，含模板表头）
+└── build-log.md                        # 编译日志（每次 npm run compile 由 build-info.mjs 追加，含版本号+时区）
 ```
 
 ### 3.2 文件详细说明
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `extension.ts` | ~850 | 扩展激活/停用，注册 Provider 和 7 条命令，`manageApiKeys` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key），首次安装欢迎页引导 |
+| `extension.ts` | ~870 | 扩展激活/停用，注册 Provider 和 7 条命令，`manageApiKeys` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key/**余额显示**），首次安装欢迎页引导 |
 | `provider.ts` | ~1290 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由、多 key 轮换循环、余额预检、被动切换）及图片代理多轮循环处理 |
 | `keyManager.ts` | ~500 | 多 API Key 管理：SecretStorage 存取与旧 key 迁移、rotation/single 选择逻辑、可用性状态（持久化 available + 瞬态冷却）、轮换错误判定、脱敏、批量添加（addApiKeys）、三字段编辑（updateApiKey） |
-| `balanceCheck.ts` | ~180 | 余额查询：cookie 认证 `GET /api/usage-summary`、TTL 缓存、`isKeyBalanceSufficient` 预检、`testKeyAvailability` 手动检测（查余额 + 最小聊天请求） |
+| `balanceCheck.ts` | ~195 | 余额查询：cookie 认证 `GET /api/usage-summary`、TTL 缓存、`checkKeyBalance` 预检（返回余额值供日志/UI 展示）、`isKeyBalanceSufficient` 快捷判断、`testKeyAvailability` 手动检测（查余额 + 最小聊天请求） |
 | `models.ts` | ~230 | 14 个内置模型定义，模型配置查询（所有模型声明 `imageInput: true`） |
 | `types.ts` | ~95 | `TokenRhythmModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
 | `apiModelList.ts` | ~120 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
 | `modelsDev.ts` | ~130 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
-| `modelSync.ts` | ~160 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），事件追加到 `.copilot/model-sync-log.md`（无工作区时回退全局存储），无 Key/API 不可用记录失败且不标记已同步 |
+| `modelSync.ts` | ~90 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「TokenRhythm」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
 | `commonApi.ts` | ~462 | `CommonApi<TMessage,TRequestBody>` 抽象基类（图片存储、工具调用拦截） |
 | `provideModel.ts` | ~130 | 模型信息提供函数（含自动发现）：过滤内置模型、从 API 和 models.dev 自动发现新增模型 |
 | `provideToken.ts` | ~100 | Token 用量计算 |
@@ -522,7 +528,9 @@ test/
 扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册七条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设、管理 API Keys）；首次安装时调用 `showWelcomeIfNeeded()` 显示欢迎页引导。
 
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
-多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态标记），支持动作：添加 Key（可附 label/cookie）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 cookie/key/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`addKeyFlow`、`pickKey`。
+多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**余额显示**标记），支持动作：添加 Key（可附 label/cookie）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 cookie/key/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`addKeyFlow`、`pickKey`。
+
+**余额显示（2026-08-11）**：主界面 `render()` 与检测二级界面 `showCheckMenu()` 均通过 `getBalanceCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询余额并展示——`$(coin) ¥X.XX`（余额 > minBalanceCny）或 `$(error) ¥X.XX`（余额 ≤ minBalanceCny，即轮询会被跳过的 key）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
 
 #### `showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void>`
 检查是否已显示过欢迎页（通过 `globalState` 的 `WELCOME_SHOWN_KEY` 标记）。如果已标记或已有 API Key，直接返回；否则通过 `workbench.action.openWalkthrough` 命令打开 Walkthrough 页面并标记为已显示。静默处理异常，不阻塞扩展激活。
@@ -861,8 +869,11 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 #### `getBalanceCached(cookie, ttlSec): Promise<number | undefined>`
 带 TTL 缓存的余额查询（按 cookie 粒度）；查询失败返回 undefined（不抛错）。
 
+#### `checkKeyBalance(cookie): Promise<{ sufficient: boolean; balance?: number }>`
+检查余额是否充足并返回查询到的余额值（供日志/管理界面展示）。判定：余额 > minBalanceCny（默认 0，即余额 ≤ 0 视为不足）→ `sufficient=true`；查询失败（cookie 失效/网络）→ `{sufficient: true}`（不阻塞请求，回退被动检测——余额不足时 API 返回 402 触发轮换）。
+
 #### `isKeyBalanceSufficient(cookie): Promise<boolean>`
-判断余额是否充足（> minBalanceCny）；查询失败返回 true（不阻塞请求，回退被动检测）。
+判断余额是否充足（> minBalanceCny）；委托 `checkKeyBalance`；查询失败返回 true（不阻塞请求，回退被动检测）。
 
 #### `testKeyAvailability(entry, baseUrl?): Promise<{ ok: boolean | null; reason?: "balance" | "invalid" | "network" }>`
 手动检测可用性：有 cookie 先查余额（≤ 阈值 → `{ok:false, reason:"balance"}`）→ 发最小真实聊天请求（`say ok` + `max_tokens=8`）：200 → `{ok:true}`，402/`INSUFFICIENT_BALANCE` → `{ok:false, reason:"balance"}`，401 → `{ok:false, reason:"invalid"}`，网络/超时/其他 → `{ok:null}`（无法确定）。
@@ -914,13 +925,10 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 4. `ensureModelsDevLoaded()` 预热 models.dev 元数据缓存（1 小时 TTL）。
 5. `getApiModelIds()` 拉取 API 模型列表；`isApiFetchSuccessful()` 为 false 或列表为空时记录 `❌ 失败` 事件并返回（不标记已同步）。
 6. 用 `getBuiltInModelIds()` 对比，找出不在内置列表中的新模型。
-7. `appendSyncEvent()` 记录 `✅ 成功` 事件（含新模型列表）；成功后 `globalState.update()` 标记今日已同步。
+7. `logSyncEvent()` 记录 `✅ 成功` 事件（含新模型列表）；成功后 `globalState.update()` 标记今日已同步。
 
-#### `appendSyncEvent(context, status, detail): Promise<void>`
-将一条同步事件追加到 Markdown 日志文件。日志位置：工作区 `.copilot/model-sync-log.md`（优先）；无工作区文件夹时回退到扩展 `globalStorageUri`。文件不存在时自动创建（含表头）。行格式：`| 时间 | 结果 | 说明 |`，说明中的 `|` 会被转义。写入失败仅记日志，不影响启动流程。
-
-#### `resolveSyncLogUri(context): vscode.Uri`
-解析同步日志文件 URI：优先第一个工作区文件夹的 `.copilot/model-sync-log.md`，否则 `context.globalStorageUri`。
+#### `logSyncEvent(status, detail): Promise<void>`
+将一条同步事件以**一行日志**输出到「TokenRhythm」输出通道（`models.sync` 标签，含状态/说明）。**不写任何文件**——v1.7.0 起移除工作区 `.copilot/model-sync-log.md`（该文件会污染用户仓库，见 issue #1）。写入失败仅记日志，不影响启动流程。
 
 ---
 
