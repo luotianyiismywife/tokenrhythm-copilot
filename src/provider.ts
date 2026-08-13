@@ -29,6 +29,8 @@ import { CommonApi, type StreamUsage } from "./commonApi";
 import { callVisionModel, callVisionModelMulti } from "./vision/imageProxy";
 import { ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_DEF } from "./vision/types";
 import type { StoredImage } from "./vision/types";
+import { createVisionToolHistoryPart } from "./vision/historyPart";
+import type { VisionToolHistoryEntry } from "./vision/historyCodec";
 import { logger } from "./logger";
 import { l10n } from "./localize";
 import {
@@ -970,6 +972,24 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             params.trackingProgress.report(
                 new vscode.LanguageModelThinkingPart("", textBlockId) as unknown as LanguageModelResponsePart
             );
+
+            // Persist the completed internal tool exchange in the response
+            // stream. VS Code can carry this DataPart into the next request;
+            // the API converters then rebuild the standard tool messages.
+            const previousReasoning = params.apiMode === "openai"
+                ? ((api as any)._capturedReasoningContent as string | undefined)
+                : undefined;
+            const historyEntry: VisionToolHistoryEntry = {
+                id: intercepted.id,
+                name: intercepted.name as VisionToolHistoryEntry["name"],
+                args: intercepted.args,
+                result: description,
+                ...(previousReasoning !== undefined ? { reasoningContent: previousReasoning } : {}),
+            };
+            params.trackingProgress.report(
+                createVisionToolHistoryPart(historyEntry) as unknown as LanguageModelResponsePart
+            );
+
             if (params.token.isCancellationRequested) {
                 logger.info("vision.skipped-round", { round, reason: "user_cancelled" });
                 break;

@@ -35,7 +35,7 @@
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
 | **工具调用 (Tool Calling)** | 支持 VS Code 的 LanguageModelToolCallPart 机制 |
-| **图片代理 (Tool-based)** | 为不支持视觉的模型注入 `ask_image` 工具，模型可自主选择调用视觉模型（默认 Kimi K2.6）回答关于图片的具体问题，支持两轮 API 请求完成"调用工具→提问→获取答案→继续回答"的完整流程。与旧版 `describe_image` 不同，`ask_image` 允许模型针对图片提出具体问题（如"按钮是什么颜色？"），视觉模型会针对性回答。视觉模型 ID、查询提示词和思考模式均可通过设置配置；视觉代理会在同一个 thinking 块中显示“正在根据图片提问：[问题]”并实时追加视觉模型流式输出 |
+| **图片代理 (Tool-based)** | 为不支持视觉的模型注入 `ask_image` 工具，模型可自主选择调用视觉模型（默认 Kimi K2.6）回答关于图片的具体问题，支持两轮 API 请求完成"调用工具→提问→获取答案→继续回答"的完整流程。与旧版 `describe_image` 不同，`ask_image` 允许模型针对图片提出具体问题（如"按钮是什么颜色？"），视觉模型会针对性回答。视觉模型 ID、查询提示词和思考模式均可通过设置配置；视觉代理会在同一个 thinking 块中显示“正在根据图片提问：[问题]”并实时追加视觉模型流式输出。**跨轮视觉历史持久化（v1.8.0）**：每轮视觉代理完成后输出私有 MIME（`application/vnd.opencodego.vision-tool-history+json`）的 `LanguageModelDataPart`，VS Code 自动带入下一轮对话；下次请求 `convertMessages`（OpenAI/Anthropic）识别该 DataPart 并重建标准 tool call + tool result 消息，模型不会忘记之前看过的图片 |
 | **上下文窗口声明** | `maxInputTokens` 按真实上下文窗口的**可配置比例**声明（内置模型与自动发现模型均适用，默认 `1.0` 即完整窗口，可通过设置 `tokenrhythm.maxInputTokensRatio` 调整，范围 0.1–1.0，**建议 0.8**）。VS Code agent 模式的自动压缩（`chat.summarizeAgentConversationHistory.enabled`，约在 `maxInputTokens` 的 90% 触发）在比例 0.8 时于真实上下文的约 **72%** 处触发，避免按完整上下文（如 1M token）声明时压缩永不触发的问题。`context_length` / `max_completion_tokens` 保持真实值不变（用于 API 请求体） |
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
@@ -359,11 +359,22 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
            ├── 使用模型的具体 query 调用 callVisionModel()，并将视觉模型文本流实时追加到同一 thinking 块
            │   └── 发送图片 + 查询到视觉模型，收集流式回答
            ├── 关闭 thinking
+           ├── 输出跨轮历史 DataPart（createVisionToolHistoryPart）:
+           │   ├── 封装 { version: 1, entry: { id, name, args, result, reasoningContent? } }
+           │   ├── MIME: application/vnd.opencodego.vision-tool-history+json
+           │   ├── reasoningContent 取自 OpenAI 模式的 _capturedReasoningContent（DeepSeek 兼容）
+           │   └── VS Code 自动把该 DataPart 带入下一轮对话
            ├── 构建本轮消息: 追加 assistant(tool_call) + tool(result)
            ├── 注入工具: VS Code 原生工具 + ask_image（两者共存）
            ├── 发送 API 请求并流式处理
            ├── 若模型再次调用 ask_image → 继续循环
            └── 若模型未调 ask_image → 结束
+
+跨轮恢复（下一轮请求的 convertMessages）:
+  ├── OpenAI 模式: parseVisionToolHistoryPart(part) → toOpenAIVisionToolMessages(entry)
+  │   └── 重建 [{role:"assistant", tool_calls:[...], reasoning_content?}, {role:"tool", tool_call_id, content}]，插到该消息正常内容之前
+  └── Anthropic 模式: parseVisionToolHistoryPart(part) → toAnthropicVisionToolMessages(entry)
+      └── 重建 [{role:"assistant", content:[{type:"tool_use",...}]}, {role:"user", content:[{type:"tool_result",...}]}]，在 system 处理与工具结果合并缓冲之前
 ```
 
 #### 多轮请求特点
@@ -371,8 +382,9 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
 - **支持无限追问**: 模型拿到图片描述后可以继续调用 ask_image 追问细节（最多 `visionMaxRounds` 次，默认 5）
 - **工具共存**: 每轮同时注入 VS Code 原生工具（read_file 等）+ ask_image，模型可混合使用
 - **图片数据生命周期**: 图片存于 API 实例的 `_localImages` 数组，请求结束后随实例 GC 自动回收
+- **跨轮视觉历史持久化（v1.8.0）**: 每轮视觉代理完成后输出私有 MIME `application/vnd.opencodego.vision-tool-history+json` 的 `LanguageModelDataPart`（`historyPart.ts` 的 `createVisionToolHistoryPart`），VS Code 自动带入下一轮对话；下次请求 `convertMessages` 经 `parseVisionToolHistoryPart` 识别并重建标准 tool call/tool result 消息（`historyCodec.ts` 的 `toOpenAIVisionToolMessages` / `toAnthropicVisionToolMessages`）——模型跨轮记住之前看过的图片，不会重复调用 ask_image 或忘记图片内容
 - **OpenAI 模式**: 使用 `tool_calls` + `tool` role 消息格式构建每轮
-- **Anthropic 模式**: 使用 `tool_use` + `tool_result` content block 格式构建每轮
+- **Anthropic 模式**: 使用 `tool_use` + `tool_result` content block 格式构建每轮；**连续工具结果合并（v1.8.0）**: VS Code 可能把每个工具结果作为独立消息传入，Anthropic 协议要求同一 assistant `tool_use` 对应的全部 `tool_result` 必须在紧随的同一条 user 消息里——`convertMessages` 缓冲纯工具结果消息（`pendingToolResults`），合并为单条 user 消息输出，避免 400 "tool_use ids were found without tool_result blocks immediately after"
 - **Responses 模式**: 使用文本化回填（assistant `output_text` `[tool_call] name(args) [/tool_call]` + user `input_text` `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）。**工具定义需扁平格式**：Responses 端点要求 `{ type: "function", name, description, parameters }`（OpenAI 端点的嵌套 `function` 格式会被拒绝，报 `InvalidParameter: ...valid openai-compatible JSON schema`）——`ResponsesApi.prepareRequestBody` 已按扁平格式注入，且工具定义来自 VS Code 转换后的扁平结构
 - **参数保留**: 每轮保留 temperature、top_p、thinking 模式等原始参数
 - **DeepSeek 兼容**: 对 DeepSeek 模型的 assistant tool_call 消息注入 reasoning_content 字段
@@ -448,6 +460,8 @@ src/
 │   └── imageUtils.ts                     # 图片尺寸解析
 ├── vision/
 │   ├── types.ts                          # Vision proxy 类型定义
+│   ├── historyCodec.ts                   # 跨轮视觉历史编解码（serialize/deserialize/toOpenAI/toAnthropic）
+│   ├── historyPart.ts                    # 跨轮视觉历史 DataPart 创建/解析（私有 MIME）
 │   └── imageProxy.ts                     # 图片代理核心 (ask_image)
 └── resources/
     └── walkthrough/                      # 安装欢迎页 (Walkthrough) 文档
@@ -465,6 +479,8 @@ scripts/
 ├── copy-tokenizer.js                    # 拷贝 tokenizer 资源
 ├── export-call-logs.mjs                 # 导出全部调用日志为 CSV（cookie 认证）
 ├── analyze-call-logs.mjs                # 分析调用日志 CSV（按模型/Key/状态/协议/小时统计）
+├── test-vision-history.mjs              # 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2）
+├── test-anthropic-tool-result-merge.mjs # Anthropic 连续工具结果合并测试（源自上游 opencode-go-copilot v1.9.2）
 └── cookieApi/
     ├── types.ts                         # 用户中心 API 类型定义（UsageSummary/CallLog 等）
     ├── cookieApi.ts                     # 用户中心 API 客户端（cookie 认证：余额/调用日志）
@@ -499,9 +515,9 @@ test/
 | `logger.ts` | ~55 | 日志输出 (LogOutputChannel) |
 | `localize.ts` | ~109 | 中英文国际化 |
 | `versionManager.ts` | ~35 | 扩展版本信息 |
-| `openai/openaiApi.ts` | ~613 | OpenAI 格式 API 实现 (消息转换/请求构建/流式处理/图片代理) |
+| `openai/openaiApi.ts` | ~613 | OpenAI 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建) |
 | `openai/openaiTypes.ts` | ~75 | OpenAI 类型定义 |
-| `anthropic/anthropicApi.ts` | ~535 | Anthropic 格式 API 实现 (消息转换/请求构建/流式处理/图片代理) |
+| `anthropic/anthropicApi.ts` | ~535 | Anthropic 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建/**连续工具结果合并**) |
 | `anthropic/anthropicTypes.ts` | ~130 | Anthropic 类型定义 |
 | `responses/responsesApi.ts` | ~600 | Responses API 格式实现 (消息转换/请求构建/流式处理/图片代理/文本化工具回填) |
 | `responses/responsesTypes.ts` | ~130 | Responses 类型定义 |
@@ -512,10 +528,14 @@ test/
 | `cookieApi/cli.ts` | ~140 | 用户中心查询 CLI（临时调试用）：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`（编译：`npx tsc -p scripts/tsconfig.json`） |
 | `export-call-logs.mjs` | ~80 | 导出全部调用日志为 CSV（`$env:TR_SESSION="<cookie>"; node scripts/export-call-logs.mjs [startAt] [endAt] [outFile]`） |
 | `analyze-call-logs.mjs` | ~110 | 分析调用日志 CSV 并输出统计（按模型/Key/状态/协议/小时/单次成本 TOP5）：`node scripts/analyze-call-logs.mjs [csv路径]` |
+| `test-vision-history.mjs` | ~150 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
+| `test-anthropic-tool-result-merge.mjs` | ~170 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
 | `build-info.mjs` | ~90 | 编译元信息生成：`npm run compile` 后自动运行，写入 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加 `.copilot/build-log.md`（编译日志） |
 | `tokenizer/tokenizerManager.ts` | ~115 | o200k_base 分词器管理 (含 LRU 缓存) |
 | `tokenizer/imageUtils.ts` | ~130 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
 | `vision/types.ts` | ~53 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
+| `vision/historyCodec.ts` | ~150 | 跨轮视觉历史编解码（源自上游 opencode-go-copilot v1.9.2）：`VISION_TOOL_HISTORY_MIME`、`VisionToolHistoryEntry`、`serializeVisionToolHistory`、`deserializeVisionToolHistory`、`toOpenAIVisionToolMessages`、`toAnthropicVisionToolMessages` |
+| `vision/historyPart.ts` | ~28 | 跨轮视觉历史 DataPart 创建/解析（源自上游）：`createVisionToolHistoryPart`、`parseVisionToolHistoryPart` |
 | `vision/imageProxy.ts` | ~95 | 图片代理核心：调用视觉模型描述图片（`callVisionModel`/`callVisionModelMulti`），支持 thinking 模式配置和文本流式转发 |
 
 ---
@@ -571,7 +591,7 @@ test/
 执行单个 key 的完整 API 请求：三协议分发（openai/anthropic/responses，原 provideLanguageModelChatResponse 内的协议分支）、流式处理、`_handleInterceptedToolCall` 图片代理第二轮。在轮换循环内每轮调用一次。参数含 `apiKey`（当前选中的 key 值）、`requestHeaders`、`trackingProgress`、`onUsage`（用量回调）等。错误抛出给轮换循环调用方决定是否换 key。
 
 #### `private async _handleInterceptedToolCall(params): Promise<void>`
-处理图片代理拦截。循环处理最多 `tokenrhythm.visionMaxRounds` 轮（默认 5）。每轮检测 API 实例的 `interceptedToolCall`，发出 thinking 块显示“正在根据图片提问：[问题]”，关闭 thinking 块后视觉模型输出以普通文本流式显示。单图调用 `callVisionModel()`，多图调用 `callVisionModelMulti()`，构建本轮 API 请求（追加 assistant tool_call + tool result），注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 图时）供模型继续使用，保留 temperature/reasoning_effort 等原始参数，DeepSeek 兼容注入 `reasoning_content`。模型不再调用 ask_image/ask_with_multi_image 时退出循环。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），直接报错由用户重试整个请求。
+处理图片代理拦截。循环处理最多 `tokenrhythm.visionMaxRounds` 轮（默认 5）。每轮检测 API 实例的 `interceptedToolCall`，发出 thinking 块显示“正在根据图片提问：[问题]”，关闭 thinking 块后视觉模型输出以普通文本流式显示。单图调用 `callVisionModel()`，多图调用 `callVisionModelMulti()`，**每轮在关闭 thinking 块后输出跨轮视觉历史 DataPart（`createVisionToolHistoryPart`，封装 id/name/args/result/reasoningContent）供 VS Code 带入下一轮对话**，构建本轮 API 请求（追加 assistant tool_call + tool result），注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 图时）供模型继续使用，保留 temperature/reasoning_effort 等原始参数，DeepSeek 兼容注入 `reasoning_content`。模型不再调用 ask_image/ask_with_multi_image 时退出循环。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），直接报错由用户重试整个请求。
 
 - 视觉模型调用期间用户取消则跳过本轮。
 - 每轮创建独立 AbortController，带独立超时。
@@ -1054,6 +1074,43 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ---
 
+### 4.24b `src/vision/historyCodec.ts`（源自上游 opencode-go-copilot v1.9.2）
+
+跨轮视觉历史编解码模块：把每轮完成的 ask_image 工具调用/结果序列化为私有 MIME 的 DataPart 负载，下一轮请求时解码并重建标准 tool call/tool result 消息。
+
+#### `const VISION_TOOL_HISTORY_MIME`
+`"application/vnd.opencodego.vision-tool-history+json"` — 私有 MIME 类型，用于在响应流中持久化被拦截的视觉工具调用。VS Code 可将该 DataPart 带入下一轮请求。
+
+#### `interface VisionToolHistoryArguments`
+`{ imageIndex?: number; imageIndices?: number[]; query: string; [key: string]: unknown }` — 视觉工具调用参数（与 `InterceptedToolCall.args` 对应）。
+
+#### `interface VisionToolHistoryEntry`
+`{ id: string; name: typeof ASK_IMAGE_TOOL_NAME | typeof ASK_WITH_MULTI_IMAGE_TOOL_NAME; args: VisionToolHistoryArguments; result: string; reasoningContent?: string }` — 一条完整的视觉工具调用/结果记录。`reasoningContent` 为 DeepSeek 兼容的 assistant tool call 推理内容。
+
+#### `serializeVisionToolHistory(entry): Uint8Array`
+序列化：`{ version: 1, entry }` JSON → `TextEncoder().encode()`。
+
+#### `deserializeVisionToolHistory(data): VisionToolHistoryEntry | null`
+解码 + 严格校验（`version === 1`、工具名合法、`args.query`/`result` 为 string、`imageIndex`/`imageIndices` 为非负整数）；任何不符返回 `null`。
+
+#### `toOpenAIVisionToolMessages(entry): OpenAIChatMessage[]`
+重建 OpenAI 消息对：`[{ role: "assistant", tool_calls: [...], reasoning_content? }, { role: "tool", tool_call_id, content }]`。
+
+#### `toAnthropicVisionToolMessages(entry): AnthropicMessage[]`
+重建 Anthropic 消息对：`[{ role: "assistant", content: [{ type: "tool_use", ... }] }, { role: "user", content: [{ type: "tool_result", ... }] }]`。
+
+---
+
+### 4.24c `src/vision/historyPart.ts`（源自上游 opencode-go-copilot v1.9.2）
+
+#### `createVisionToolHistoryPart(entry): vscode.LanguageModelDataPart`
+创建携带跨轮视觉历史的数据部分：`new vscode.LanguageModelDataPart(serializeVisionToolHistory(entry), VISION_TOOL_HISTORY_MIME)`。由 provider 每轮视觉代理完成后输出到响应流。
+
+#### `parseVisionToolHistoryPart(part): VisionToolHistoryEntry | null`
+解析持久化的视觉历史 DataPart：非 `LanguageModelDataPart` 或 MIME 不匹配返回 `null`；否则 `deserializeVisionToolHistory(part.data)`。由 openai/anthropic 的 `convertMessages` 在 part 循环开头调用。
+
+---
+
 ### 4.25 `scripts/cookieApi/types.ts`
 
 #### `interface ApiResponse<T>`
@@ -1244,7 +1301,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 构造函数，传入模型 ID。
 
 #### `convertMessages(messages, modelConfig): OpenAIChatMessage[]`
-将 VS Code 消息转换为 OpenAI 格式。支持文本、图片、工具调用、工具结果、推理内容的消息转换。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。同时递归扫描 `LanguageModelToolResultPart.content` 中的图片一并存入（确保通过工具返回的图片也能被 `ask_image` 代理识别）。
+将 VS Code 消息转换为 OpenAI 格式。支持文本、图片、工具调用、工具结果、推理内容的消息转换。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。同时递归扫描 `LanguageModelToolResultPart.content` 中的图片一并存入（确保通过工具返回的图片也能被 `ask_image` 代理识别）。**跨轮视觉历史恢复（v1.8.0）**：part 循环开头调用 `parseVisionToolHistoryPart` 识别私有 MIME 的历史 DataPart，在 `joinedText` 计算后、assistant 消息处理前用 `toOpenAIVisionToolMessages` 重建标准 `assistant tool_call → tool → assistant text` 消息序列（保证顺序正确）。
 
 #### `prepareRequestBody(rb, um?, options?): Record<string, unknown>`
 构建 OpenAI 请求体。设置 temperature、top_p、max_tokens、reasoning_effort（adaptive 模式时跳过）、thinking 模式（TokenRhythm OpenAI 端点仅接受字符串：支持 `{ type: "enabled" }`、`{ type: "auto" }`（自适应模式，`adaptive` 会被拒绝）和关闭用 `{ type: "disabled" }`）、stop、tools、tool_choice 以及各种惩罚参数和 extra 参数。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。
@@ -1278,7 +1335,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 `{ type: "tool_use", id, name, input }` — 工具使用块。
 
 #### `interface AnthropicToolResultBlock`
-`{ type: "tool_result", tool_use_id, content, is_error? }` — 工具结果块。
+`{ type: "tool_result", tool_use_id, content: string | (AnthropicTextBlock | AnthropicImageBlock)[], is_error? }` — 工具结果块（v1.8.0 起 content 类型放宽为支持图片块）。
 
 #### `type AnthropicContentBlock`
 文本 | 图片 | 推理 | 工具使用 | 工具结果的联合类型。
@@ -1308,7 +1365,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 构造函数，传入模型 ID。
 
 #### `convertMessages(messages, modelConfig): AnthropicMessage[]`
-将 VS Code 消息转换为 Anthropic 格式。系统消息提取到 `_systemContent`。支持文本、图片、工具使用、工具结果、推理内容。使用 `content` 块数组格式。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。同时递归扫描 `AnthropicToolResultBlock.content` 中的图片一并存入（确保通过工具返回的图片也能被 `ask_image` 代理识别）。
+将 VS Code 消息转换为 Anthropic 格式。系统消息提取到 `_systemContent`。支持文本、图片、工具使用、工具结果、推理内容。使用 `content` 块数组格式。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。同时递归扫描 `AnthropicToolResultBlock.content` 中的图片一并存入（确保通过工具返回的图片也能被 `ask_image` 代理识别）。**连续工具结果合并（v1.8.0）**：for 循环外声明 `pendingToolResults` 缓冲区与 `flushPendingToolResults`；纯工具结果消息（user + 有 toolResults + 无文本/图片/历史）缓冲入区并 `continue`，其他消息类型前先 flush——保证同一 assistant `tool_use` 对应的全部 `tool_result` 输出为**单条** user 消息（Anthropic 协议要求，避免 400 "tool_use ids were found without tool_result blocks immediately after"）；循环结束后最后 flush 一次。**跨轮视觉历史恢复（v1.8.0）**：part 循环开头调用 `parseVisionToolHistoryPart`，在 `joinedText` 计算后、system 消息处理前用 `toAnthropicVisionToolMessages` 重建 `assistant tool_use → user tool_result` 序列（放在工具结果合并缓冲逻辑之前保证顺序正确）。
 
 #### `prepareRequestBody(rb, um?, options?): AnthropicRequestBody`
 构建 Anthropic 请求体。设置 max_tokens、system、thinking 模式（支持 `{ type: "enabled" }`、`{ type: "adaptive" }` 和 `{ type: "disabled" }`）、tools（转换为 Anthropic 格式）、tool_choice（auto/any/none）以及 extra 参数。**仅在 thinking 强制 enabled 时跳过 temperature/top_p**（2026-08-06 实测：`enabled` + temperature/top_p → 400"请求参数组合无效"，符合 Anthropic 协议 extended thinking 须省略 temperature 的规则；`adaptive`/`disabled` 与 temperature/top_p 组合均 200 通过，故保留温度控制）。保留 top_k。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。

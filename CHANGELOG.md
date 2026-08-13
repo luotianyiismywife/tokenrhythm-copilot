@@ -1,5 +1,22 @@
 # 更新日志（Changelog）
 
+## v1.8.0 (2026-08-13)
+
+### 跨轮视觉历史持久化
+
+- **模型跨轮记住看过的图片**：此前 `ask_image` 图片代理的历史只在单次请求内有效，用户发完图片对话一轮后再发新消息，模型会忘记之前看过的图片，可能重复调用 `ask_image` 或答非所问。v1.8.0 起，每轮视觉代理完成后会向响应流输出一个私有 MIME（`application/vnd.opencodego.vision-tool-history+json`）的数据部分，VS Code 自动把它带入下一轮对话；下次请求时 OpenAI / Anthropic 两个消息转换器识别该数据并重建标准的 tool call + tool result 消息，模型跨轮记住图片内容。
+- **DeepSeek 兼容**：重建的 assistant tool_call 消息保留 `reasoning_content`（取自本轮视觉代理捕获的推理内容），满足 DeepSeek thinking 模式对每个 assistant 消息必须回传该字段的要求。
+
+### Anthropic 连续工具结果合并
+
+- **修复 400 "tool_use ids were found without tool_result blocks immediately after"**：Anthropic 协议要求一条 assistant `tool_use` 消息对应的全部 `tool_result` 必须放在紧随的同一条 user 消息中，但 VS Code 可能把每个工具结果作为独立消息传入。v1.8.0 起消息转换器会把连续的工具结果缓冲并合并为单条 user 消息输出（多轮对话并行工具调用场景），单个工具结果行为不变，文本+工具结果混合消息不合并。
+
+### 新增测试脚本
+
+- **跨轮视觉历史编解码 + 双 API 转换器闭环测试**（`scripts/test-vision-history.mjs`）：验证序列化/反序列化、OpenAI/Anthropic 消息重建顺序、DeepSeek 空 `reasoning_content` 回归用例。
+- **Anthropic 工具结果合并测试**（`scripts/test-anthropic-tool-result-merge.mjs`）：验证 3 个并行 tool_use 结果合并、单结果不合并、混合消息不缓冲。
+- 两个测试均源自上游 opencode-go-copilot v1.9.2，运行前需 `npm run compile`。
+
 ## v1.7.0 (2026-08-11)
 
 ### 模型同步不再写工作区文件
