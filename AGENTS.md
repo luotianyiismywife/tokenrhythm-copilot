@@ -266,6 +266,8 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │           ├── 发出同一 thinking 块: "正在根据图片提问：[问题]" + 视觉模型流式输出
   │           ├── 调用 callVisionModel() 获取描述（可选实时转发文本到 thinking 块）
   │           ├── 关闭 thinking 块
+  │           ├── 输出跨轮视觉历史 DataPart（createVisionToolHistoryPart，封装 id/name/args/result/reasoningContent）
+  │           │   └── VS Code 自动带入下一轮对话（私有 MIME application/vnd.opencodego.vision-tool-history+json）
   │           ├── 用户取消则跳过本轮
   │           ├── 创建独立 AbortController 用于本轮请求
   │           │   ├── 保留 temperature/reasoning_effort 等原始参数
