@@ -1,12 +1,19 @@
-# 多 API Key 轮询与余额自动切换 — 完整设计方案
+# 多 API Key 轮询与余额自动切换 — 设计方案（已实施）
 
-> 状态：待实施 | 日期：2026-08-09 | 适用范围：聊天请求、Git 提交消息生成、模型列表、启动同步、手动检测
+> 状态：**已实施**（v1.8.0 起完整落地，v1.9.0 增强）| 设计日期：2026-08-09 | 最后更新：2026-08-15 | 适用范围：聊天请求、Git 提交消息生成、模型列表、启动同步、手动检测
 >
 > **2026-08-09 实测确认（用户提供 cookie + 对应 key）：**
 > - `GET /api/usage-summary`（cookie 认证）：余额为负时返回 `code:0` + `availableBalanceCny:-0.0447`，**可正常查询**
 > - `GET /v1/models`（Bearer key 认证）：余额 -0.04 时返回 **HTTP 200**，**模型列表不受余额影响**
 > - `POST /v1/chat/completions`（余额不足）：返回 **HTTP 402** + `{"code":"INSUFFICIENT_BALANCE","message":"余额不足","traceId":"..."}`，**请求被余额校验拦截，不消耗 token**
 > - 结论：**被动检测错误签名 = 402 + `INSUFFICIENT_BALANCE` + "余额不足"**；**手动检测不能用 `/v1/models`（余额<0 也 200）**，改用最小真实聊天请求
+>
+> **2026-08-15 实测确认（v1.9.0，usage-summary 完整字段）：**
+> - `GET /api/usage-summary` 返回完整余额详情：`balanceCny`（账户总额）、`availableBalanceCny`（可用）、`expiringBalanceCny`（**赠送/限时额度**，到期未用失效）、`nextExpiryAt`（**最近到期时间** ISO 8601 UTC，无则 null）、`signupReward`、`frozenBalanceCny`、`costCny`、`currency`
+> - **充值余额 = availableBalanceCny - expiringBalanceCny**；赠送余额 > 0 时管理界面显示 `（至 YYYY-MM-DD）` 有效期
+> - `GET /api/wallet/expiring-credits?page=1&pageSize=20` 提供赠送额度明细（`{asOf, summary:{expiringBalanceCny,nextExpiryAt}, list:[{sourceLabel,grantedCny,remainingCny,grantedAt,expiresAt}]}`）——前端页面「限时额度」区域数据源，扩展暂未使用（仅 usage-summary 足够）
+> - API 金额字段可能以**字符串**返回（避免浮点精度问题），`queryBalanceDetail` 统一 `Number()` 强转，非法值兑底 0（2026-08-14 曾因此崩溃，已修复）
+> - **503 服务端繁忙**：加入默认轮换状态码 + 瞬态自动重试（见 §1 / §3）
 
 ---
 
@@ -21,9 +28,13 @@
 
 **余额管理核心机制：**
 
-- **主动预检（核心）**：每个 key 可绑定一个 `tr_session` cookie（**一个 cookie 可绑定多个 key**，共享余额）。请求前调用 `GET /api/usage-summary` 查询 cookie 余额，余额 ≤ `minBalanceCny`（设置可调，默认 0）时自动跳过该 key 并切换到下一个。
-- **被动检测（兜底）**：cookie 缺失 / 失效 / 网络失败时，无法预检；改为在请求失败后根据 HTTP 状态码（**402 余额不足** / 401 无效 Key / 429 限流）和错误文本模式判定 key 失效并切换。**已实测 402 错误体：`{"code":"INSUFFICIENT_BALANCE","message":"余额不足"}`**。
+- **主动预检（核心）**：每个 key 可绑定一个 `tr_session` cookie（**一个 cookie 可绑定多个 key**，共享余额）。请求前调用 `GET /api/usage-summary` 查询 cookie 余额详情，可用余额 ≤ `minBalanceCny`（设置可调，默认 0）时自动跳过该 key 并切换到下一个。
+- **被动检测（兜底）**：cookie 缺失 / 失效 / 网络失败时，无法预检；改为在请求失败后根据 HTTP 状态码（**402 余额不足** / 401 无效 Key / 429 限流 / **503 服务端繁忙**）和错误文本模式判定 key 失效并切换。**已实测 402 错误体：`{"code":"INSUFFICIENT_BALANCE","message":"余额不足"}`**。
 - **手动检测（自愈）**：QuickPick 管理中提供"检测可用性"按钮，对选中 key 执行"查 cookie 余额 + **最小真实聊天请求**（`say ok`、`max_tokens=8`；余额不足时被 402 拦截不耗 token）"，通过后标记为可用（充值后无需手动改状态）。**不使用 `/v1/models` 校验**（余额 < 0 也能返回 200，无法作为可用性判据）。
+- **失效原因分类**：`balance`/`invalid` 为**确定性**（持久化 `available=false`）；`rate_limited`/`server_error` 为**瞬态**（仅内存冷却，冷却到期自动恢复，不持久化）。
+- **瞬态自动重试（v1.9.0）**：全部 key 均因瞬态错误（默认 429/503，`transientRetryStatusCodes` 可配置）失败时，按 `transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s），重试前**清空瞬态冷却**（否则 `pickNextApiKey` 会跳过全部 key 使重试无效），次数用尽才报错。错误命中瞬态列表但原因非瞬态（如 500→`api_error`）时规范化为 `server_error` 仅冷却不持久化。
+- **全部 key 不可用报错（v1.9.0）**：报错列出每个 key 的脱敏 ID + 原因（`buildAllKeysUnavailableDetail`，如 `sk_****abcd: 服务端繁忙 (503)`），区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样带原因。
+- **余额展示（v1.9.0）**：管理界面所有 key 列表（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定选择界面）显示**两种余额 + 赠送有效期**——充值余额 `$(coin)/$(error) 充值 ¥X.XX` + 赠送余额 `$(gift) 赠送 ¥Y.YY（至 YYYY-MM-DD）`（`getBalanceDetailCached` TTL 缓存完整详情）。
 
 ---
 
@@ -56,11 +67,12 @@
 // 轮询游标：模块级，跨请求共享，保证顺序轮换
 let rotationIndex = 0;
 
-// 瞬态失效表：429 限流等"可能恢复"的失效，带冷却时间
-// Map<keyValue, { exhaustedAt: number; reason: "rate_limited" }>
+// 瞬态失效表：429 限流 / 503 服务端繁忙等"可能恢复"的失效，带冷却时间
+// Map<keyValue, { exhaustedAt: number; reason: "rate_limited" | "server_error" }>
 const transientExhausted = new Map<string, TransientExhausted>();
 
-// 余额查询 TTL 缓存：Map<cookie, { availableBalanceCny: number; checkedAt: number }>
+// 余额详情 TTL 缓存：Map<cookie, { detail: BalanceDetail; checkedAt: number }>
+// BalanceDetail = { balanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt }
 const balanceCache = new Map<string, BalanceCacheEntry>();
 ```
 
@@ -78,40 +90,54 @@ const balanceCache = new Map<string, BalanceCacheEntry>();
     │                             │                              │
     └────── 手动检测(余额不足/401) ┘                              │
                                                                  │
-    [true] 可用 ──请求429──▶ (内存) 冷却中 ──冷却到期自动恢复──▶ [true]
+    [true] 可用 ──请求429──▶ (内存) 冷却中(rate_limited) ──冷却到期自动恢复──▶ [true]
+    [true] 可用 ──请求503──▶ (内存) 冷却中(server_error) ──冷却到期自动恢复──▶ [true]
     [true] 可用 ──请求401──▶ [false] invalid（持久化）
     [false] 不可用 ──手动检测通过 / 预检余额恢复(自愈)──▶ [true]
     [false] 不可用 ──重置失效状态命令──▶ [null] 未检测
 ```
 
-- `available=false` 是**持久化**的（SecretStorage），重启保留。
-- 429 是**瞬态冷却**（内存 + 冷却时间 `apiKeyExhaustedCooldownMin`，默认 10 分钟），到期自动恢复，不写持久化。
+- `available=false` 是**持久化**的（SecretStorage），重启保留（确定性原因：余额不足 / 无效 Key）。
+- 429/503 是**瞬态冷却**（内存 + 冷却时间 `apiKeyExhaustedCooldownMin`，默认 10 分钟），到期自动恢复，不写持久化。**冷却期间 `pickNextApiKey` 会跳过该 key**；瞬态整轮重试前需 `resetExhaustedKeys(secrets,false)` 清空冷却。
 - **自愈**：预检发现余额充足或请求成功时，自动把该 key 恢复为 `available=true`。
+- **503 属于瞬态而非确定性**：平台繁忙通常很快恢复，持久化不可用会导致冷却到期后仍被阻挡。`getKeyRotationReason` 精确提取原因（402/401→确定性；429/503→瞬态），`markApiKeyExhausted` 按 `TRANSIENT_REASONS`（rate_limited/server_error）决定只冷却不持久化。
 
 ---
 
 ## 3. 关键函数设计
 
-### 3.1 `src/keyManager.ts`（新建）
+### 3.1 `src/keyManager.ts`
 
 | 函数 | 签名 | 职责 |
 |------|------|------|
 | `getApiKeyStore(secrets)` | `(secrets) => Promise<ApiKeyStore>` | 读取并缓存 store；自动迁移旧 `tokenrhythm.apiKey`；JSON 损坏时回退修复 |
 | `saveApiKeyStore(secrets, store)` | `(secrets, store) => Promise<void>` | 写新格式；成功后删除旧 key（幂等） |
+| `getApiKeyMode()` / `getSingleKeyFallback()` | 同步 | 读取 `apiKeyMode`（默认 rotation）/ `singleKeyFallback`（默认 error），非法值回退 |
+| `getRotationStatusCodes()` / `getRotationErrorPatterns()` | 同步 | 触发轮换的状态码（**默认 [401,402,429,503]**）/ 文本 patterns |
+| `getTransientRetryStatusCodes()` / `getTransientRetryTimes()` | 同步 | 触发瞬态整轮重试的状态码（**默认 [429,503]**，与轮换状态码解耦）/ 重试次数（默认 3，0 禁用） |
+| `getExhaustedCooldownMin()` | 同步 | 429/503 瞬态冷却时长（分钟，默认 10） |
 | `getPrimaryApiKey(secrets)` | `(secrets) => Promise<ApiKeyEntry \| undefined>` | 模型列表/同步用：single→active；rotation→第一个可用的（跳过冷却与不可用） |
 | `pickNextApiKey(secrets, mode)` | `(secrets, mode) => Promise<ApiKeyEntry \| undefined>` | 轮询/单 key 选择逻辑（见 3.2） |
-| `markApiKeyExhausted(secrets, key, reason)` | 异步 | 持久化 `available=false` + reason；429 额外记录瞬态冷却 |
-| `markApiKeyAvailable(secrets, key)` | 异步 | 置 `available=true`，清冷却（自愈/手动检测通过） |
-| `resetExhaustedKeys(secrets)` | 异步 | 清空瞬态冷却；可选将所有 `available=false` 重置为 `null` |
-| `updateKeyAvailability(secrets, key, available, reason?)` | 异步 | 通用状态更新 |
+| `getTransientExhaustedInfo(keyValue)` | 同步 | 查询瞬态冷却状态（原因 + 剩余秒数），冷却到期自动清除 |
+| `hasTransientExhaustedKey(secrets)` | 异步 | 是否存在冷却中的 key（供\"全部不可选\"时判断是否值得整轮自动重试） |
 | `isApiKeyEligible(entry)` | 同步 | 判断是否可被选中（非冷却中、非 `available=false`） |
-| `isKeyRotationError(err)` | 同步 | 匹配状态码 `[401]/[402]/[429]` 或错误文本 patterns → 判定是否应切换 |
-| `maskApiKey(key)` | 同步 | `sk_****abcd` 脱敏显示 |
-| `maskCookie(cookie)` | 同步 | `sess_****abcd` 脱敏显示 |
-| `addApiKey(secrets, entry)` | 异步 | 添加 key（校验重复）；可选附带 label/cookie |
+| `isKeyRotationError(err)` | 同步 | 匹配状态码 `[401]/[402]/[429]/[503]` 或错误文本 patterns → 判定是否应切换 |
+| `isTransientRetryError(err)` | 同步 | 状态码匹配 `transientRetryStatusCodes`（默认 [429,503]）→ 瞬态类，值得整轮自动重试 |
+| `isTransientExhaustedReason(reason)` | 同步 | 是否为瞬态原因（`rate_limited`/`server_error`） |
+| `getKeyRotationReason(err)` | 同步 | **精确提取失效原因**（比 patterns 更准）：402/INSUFFICIENT_BALANCE→`balance`；401→`invalid`；429/RATE_LIMITED→`rate_limited`；503→`server_error`；其他→`api_error` |
+| `getKeyUnavailableReason(entry)` | 同步 | 取当前不可用原因（供报错展示）：冷却中→`rate_limited`/`server_error`；持久化不可用→`unavailable`；其他→`balance` |
+| `markApiKeyExhausted(secrets, key, reason)` | 异步 | **瞬态原因**（rate_limited/server_error）→ 仅内存冷却不持久化；**确定性原因**（balance/invalid/api_error）→ 持久化 `available=false` |
+| `markApiKeyAvailable(secrets, key)` | 异步 | 置 `available=true`，清冷却（自愈/手动检测通过） |
+| `updateKeyAvailability(secrets, key, available)` | 异步 | 通用状态更新 |
+| `resetExhaustedKeys(secrets, resetPersisted)` | 异步 | 清空瞬态冷却；可选将所有 `available=false` 重置为 `null`（`resetPersisted=true`） |
+| `addApiKey(secrets, entry)` | 异步 | 添加单个 key（校验重复值） |
+| `addApiKeys(secrets, entries)` | 异步 | **批量添加**（三元组 value/label/cookie）；已有重复 key 更新其 cookie（不重复添加），返回 `{added, updated}` |
+| `updateApiKey(secrets, index, fields)` | 异步 | **三字段编辑**（value/cookie/label）；value 冲突校验，返回 `{ok, conflict?}` |
 | `removeApiKey(secrets, index)` | 异步 | 删除；调整 activeIndex 与轮询游标 |
 | `setActiveKey(secrets, index)` | 异步 | 设置 single 模式的当前 key |
 | `setKeyCookie(secrets, index, cookie?)` | 异步 | 绑定/更新/清除指定 key 的 cookie |
+| `getKeyDisplayStatus(entry)` | 同步 | `available` / `unavailable` / `unknown` / `cooldown`（供 QuickPick UI） |
+| `maskApiKey(key)` / `maskCookie(cookie)` | 同步 | `sk_****abcd` / `sess_****abcd` 脱敏 |
 
 ### 3.2 `pickNextApiKey` 选择逻辑
 
@@ -138,14 +164,19 @@ pickNextApiKey(secrets, mode):
   return undefined   // 全部不可用或冷却中
 ```
 
-### 3.3 `src/balanceCheck.ts`（新建，独立实现，不依赖 scripts/cookieApi）
+### 3.3 `src/balanceCheck.ts`（独立实现，不依赖 scripts/cookieApi）
 
 | 函数 | 签名 | 职责 |
 |------|------|------|
-| `queryAccountBalance(cookie)` | `(cookie) => Promise<number>` | `GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回 `availableBalanceCny`；401 抛"cookie 失效" |
-| `getBalanceCached(cookie, ttlSec)` | 异步 | **按 cookie 粒度** TTL 缓存；命中直接返回，未命中刷新 |
-| `isKeyBalanceSufficient(cookie, minBalanceCny, ttlSec)` | 异步 | 余额 > minBalanceCny → true；查询失败（网络/401/code≠0）→ 记日志、返回 `true`（**不阻塞请求**，回退被动） |
-| `testKeyAvailability(entry, baseUrl, minBalanceCny)` | 异步 | 手动检测：有 cookie 先查余额（≤ 阈值 → `{ok:false, reason:"balance"}`）→ **发最小真实聊天请求**（`say ok`、`max_tokens=8`）：402/INSUFFICIENT_BALANCE → `{ok:false, reason:"balance"}`，401 → `{ok:false, reason:"invalid"}`，200 → `{ok:true}`；网络/超时 → `{ok:null}` 无法确定 |
+| `queryBalanceDetail(cookie)` | `(cookie) => Promise<BalanceDetail>` | `GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回**完整余额详情** `{balanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt}`（充值=available-expiring）；金额字段经 `toNumber` 强制转 number（API 可能返回字符串，非法值兜底 0）；401 抛"cookie 失效" |
+| `queryAccountBalance(cookie)` | `(cookie) => Promise<number>` | 委托 `queryBalanceDetail` 返回 `availableBalanceCny`（向后兼容） |
+| `getBalanceDetailCached(cookie, ttlSec)` | 异步 | **按 cookie 粒度** TTL 缓存**完整详情**（供 UI 展示两种余额+有效期）；命中直接返回，未命中刷新；查询失败返回 undefined（不抛错） |
+| `getBalanceCached(cookie, ttlSec)` | 异步 | 委托 `getBalanceDetailCached` 返回可用余额数值（向后兼容） |
+| `formatExpiryDate(iso)` | 同步 | 格式化到期时间为 `YYYY-MM-DD`（本地时区）；无到期/非法返回空串（供赠送余额有效期展示） |
+| `getBalanceCheckEnabled()` / `getMinBalanceCny()` / `getBalanceCheckIntervalSec()` | 同步 | 预检开关（默认 true）/ 余额阈值（默认 0，夹取 ≥0）/ 缓存 TTL（默认 60s） |
+| `checkKeyBalance(cookie)` | 异步 | 检查余额是否充足（> minBalanceCny）并返回余额值（供日志/UI）；查询失败返回 `{sufficient:true}`（不阻塞请求，回退被动） |
+| `isKeyBalanceSufficient(cookie)` | 异步 | 委托 `checkKeyBalance` 返回是否充足 |
+| `testKeyAvailability(entry, baseUrl)` | 异步 | 手动检测：有 cookie 先查余额（≤ 阈值 → `{ok:false, reason:"balance"}`）→ **发最小真实聊天请求**（`say ok`、`max_tokens=8`）：402/INSUFFICIENT_BALANCE → `{ok:false, reason:"balance"}`，401 → `{ok:false, reason:"invalid"}`，200 → `{ok:true}`；网络/超时 → `{ok:null}` 无法确定 |
 
 > 手动检测"请求一次"为什么用真实聊天请求而非 `/v1/models`：**实测余额 -0.04 时 `/v1/models` 仍返回 200**（模型列表不校验余额），无法区分"余额不足"与"正常可用"；而真实请求在余额不足时被 402 拦截，**不消耗 token**，语义明确。
 
@@ -160,8 +191,8 @@ pickNextApiKey(secrets, mode):
 | A1 | 无任何 key | 弹输入框引导添加第一个（现有 `ensureApiKey` 行为）；取消 → 报错 | ✅ |
 | A2 | single 模式 activeIndex 越界（key 被删） | 回退到第一个 key；仍无 → A1 | ✅ |
 | A3 | rotation 模式 key 列表为空 | 同 A1 | ✅ |
-| A4 | 所有 key 均不可用（持久化 false 或冷却中） | 报"所有 API Key 均不可用"，附各 key 失败原因（脱敏） | ✅ |
-| A5 | 部分 key 冷却中（429） | 跳过，选下一个 | ✅ |
+| A4 | 所有 key 均不可用（持久化 false 或冷却中） | 报"所有 API Key 均不可用"，附各 key 失败原因（脱敏，`buildAllKeysUnavailableDetail`）；若存在瞬态冷却 key 且未达 `transientRetryTimes` 上限 → 清冷却 + 退避后重试整轮 | ✅ |
+| A5 | 部分 key 冷却中（429/503） | 跳过，选下一个 | ✅ |
 | A6 | 部分 key 持久化不可用（余额/401） | 跳过，选下一个 | ✅ |
 | A7 | 轮询游标越界（删除 key 后） | 取模回绕，不越界 | ✅ |
 | A8 | single 模式 active 不可用，fallback=`error` | 直接报错，不切换 | ✅ |
@@ -181,11 +212,13 @@ pickNextApiKey(secrets, mode):
 | C1 | 请求成功 | 若该 key 曾不可用 → 自愈置 true；break 轮换循环 | ✅ |
 | C2 | 402 余额不足 | 匹配轮换错误 → 标记不可用(balance)，换下一个 | ✅ |
 | C3 | 401 无效 Key | 匹配轮换错误 → 标记不可用(invalid)，换下一个 | ✅ |
-| C4 | 429 限流 | 匹配轮换错误 → **瞬态冷却**（不持久化），换下一个 | ✅ |
+| C4 | 429 限流 | 匹配轮换错误 → **瞬态冷却**（不持久化，reason=`rate_limited`），换下一个 | ✅ |
+| C4b | 503 服务端繁忙 | 匹配轮换错误 → **瞬态冷却**（不持久化，reason=`server_error`），换下一个；**不会傻傻报错**——全部 key 503 时自动整轮重试 | ✅ |
 | C5 | 400 参数错误 | 不轮换（配置/模型问题，换 key 无效），直接抛错 | ✅ |
 | C6 | 403 权限 | 不轮换，直接抛错 | ✅ |
 | C7 | 404/405 等 | 不轮换，直接抛错 | ✅ |
-| C8 | 500/502/503 服务端错误 | 不轮换（平台问题），由 `executeWithRetry` 重试 | ✅ |
+| C8 | 500/502/503 服务端错误 | 单请求内经 `executeWithRetry` 重试（503 默认可重试）；重试耗尽且 503 → 按 C4b 瞬态轮换 | ✅ |
+| C8b | 全部 key 均因瞬态错误（429/503）失败 | **整轮自动重试**（`tryTransientRetryRound`）：清空瞬态冷却（`resetExhaustedKeys(secrets,false)`）→ 指数退避（2s/4s/8s）→ 重试整轮，最多 `transientRetryTimes` 次；次数用尽才报错（带原因 + "请稍后重试"） | ✅ |
 | C9 | 网络错误（fetch 失败） | 不轮换（同一平台，换 key 无效），由重试机制处理 | ✅ |
 | C10 | 超时 | 不轮换，走现有超时友好提示 | ✅ |
 | C11 | 用户取消 | 不轮换，重新抛出原始错误 | ✅ |
@@ -193,8 +226,9 @@ pickNextApiKey(secrets, mode):
 | C13 | 流解析中途错误 | 不轮换（流已开始），抛错 | ✅ |
 | C14 | 状态码在配置列表但文本不匹配 | 按状态码匹配 → 轮换 | ✅ |
 | C15 | 状态码不在列表但文本匹配 patterns | 按文本匹配 → 轮换 | ✅ |
-| C16 | 所有 key 尝试后全部失败 | 报"所有 API Key 均不可用"，汇总各 key 失败原因 | ✅ |
+| C16 | 所有 key 尝试后全部失败 | 报"所有 API Key 均不可用"，汇总各 key 失败原因（脱敏，如 `sk_****abcd: 服务端繁忙 (503)`），区分瞬态（"请稍后重试"）与确定性（"用管理命令检测"） | ✅ |
 | C17 | 轮换过程中部分 key 成功 | 正常返回，成功 key 游标前移 | ✅ |
+| C18 | 错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error`） | `isTransientRetryError` 命中 → 规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key | ✅ |
 
 ### 4.2 视觉代理（ask_image 第二轮及后续请求）
 
@@ -216,7 +250,7 @@ pickNextApiKey(secrets, mode):
 | E9 | single 模式，fallback=`switch` | 降级为 rotation 选下一个可用 key，弹窗提示（同 A9） | ✅ |
 | E10 | single fallback=`switch` 且全部不可用 | 按 E7 汇总报错 | ✅ |
 | E4 | 402/401 | 标记不可用，换下一个 key 重试 | ✅ |
-| E5 | 429 | 冷却，换下一个 key 重试 | ✅ |
+| E5 | 429/503 | 瞬态冷却，换下一个 key 重试；全部瞬态失败 → 整轮自动重试（同 C8b） | ✅ |
 | E6 | 用户取消（abortGeneration） | 不重试，中止 | ✅ |
 | E7 | 所有 key 失败 | 报错，附失败原因 | ✅ |
 | E8 | 生成中途流式输出已开始（部分文本已写入 InputBox） | 换 key 重试会覆盖输入框内容——**策略：若已产生部分输出则不再换 key，直接报错**（避免用户看到半截内容被覆盖）；仅在"请求失败且尚无任何输出"时换 key 重试 | ✅ |
@@ -253,13 +287,16 @@ pickNextApiKey(secrets, mode):
 |---|------|------|------|
 | H1 | 空列表 | 仅显示"添加 Key"动作 | ✅ |
 | H2 | 添加 key | 输入 key（可附带 label、cookie）；重复值提示已存在 | ✅ |
+| H2b | **批量导入** | 表单式逐条输入 cookie/key/备注三元组，Finish 时 `addApiKeys` 批量添加；已存在 key 自动更新 cookie 不重复添加 | ✅ |
+| H2c | **编辑 key** | `editKeyFlow` 三字段（value/cookie/label）编辑，value 冲突校验 | ✅ |
 | H3 | 删除 key | 二次确认；删除 active → 调整 activeIndex；清空 → H1 | ✅ |
-| H4 | 设为当前使用 | 更新 activeIndex（single 模式生效） | ✅ |
+| H4 | 设为当前使用 | 更新 activeIndex（**仅 single 模式渲染/显示；rotation 模式隐藏**） | ✅ |
 | H5 | 绑定/更新 cookie | 选择 key → 输入 cookie | ✅ |
 | H6 | 清除 cookie | 置空（下次预检跳过该 key 的余额检查） | ✅ |
 | H7 | 重置失效状态 | 清瞬态冷却 + 所有 `available=false` → `null` | ✅ |
-| H8 | 检测可用性 | 见 4.5 矩阵 | ✅ |
+| H8 | 检测可用性 | 见 4.5 矩阵；检测二级界面（`showCheckMenu`）列出全部 key 状态 + "检测所有" | ✅ |
 | H9 | 状态显示 | `✓ 可用` / `✗ 不可用(余额不足/Key失效)` / `? 未检测` / `★ 当前使用` / `🔑 cookie 已绑定` | ✅ |
+| H9b | **余额显示（v1.9.0）** | 主界面/检测二级界面/删除·设当前·编辑·绑定选择界面均显示两种余额+赠送有效期：`$(coin)/$(error) 充值 ¥X.XX` + `$(gift) 赠送 ¥Y.YY（至 YYYY-MM-DD）`（`getBalanceDetailCached` TTL 缓存）；查询失败 `$(warning) 余额未知` | ✅ |
 | H10 | 重复添加同一 key 值 | 提示已存在，不添加 | ✅ |
 | H11 | key 值格式 | 不强制 `sk_` 前缀，允许任意值（平台可能调整格式） | ✅ |
 
@@ -318,16 +355,20 @@ pickNextApiKey(secrets, mode):
   "type": "string", "enum": ["error", "switch"], "default": "error",
   "description": "single 模式下当前 key 不可用时的行为：error=直接报错不切换；switch=自动切换到下一个可用 key 并右下角弹窗提示"
 },
-"tokenrhythm.apiKeyRotationStatusCodes": { "type": "array", "items": { "type": "number" }, "default": [401, 402, 429] },
+"tokenrhythm.apiKeyRotationStatusCodes": { "type": "array", "items": { "type": "number" }, "default": [401, 402, 429, 503] },
 "tokenrhythm.apiKeyRotationErrorPatterns": {
   "type": "array", "items": { "type": "string" },
   "default": ["余额不足", "insufficient balance", "INSUFFICIENT_BALANCE", "balance", "RATE_LIMITED", "UPSTREAM_RATE_LIMITED"]
 },
+"tokenrhythm.transientRetryStatusCodes": { "type": "array", "items": { "type": "number" }, "default": [429, 503] },
+"tokenrhythm.transientRetryTimes": { "type": "number", "default": 3, "minimum": 0, "maximum": 10 },
 "tokenrhythm.apiKeyExhaustedCooldownMin": { "type": "number", "default": 10, "minimum": 0 },
 "tokenrhythm.balanceCheckEnabled": { "type": "boolean", "default": true },
 "tokenrhythm.minBalanceCny": { "type": "number", "default": 0, "minimum": 0 },
 "tokenrhythm.balanceCheckIntervalSec": { "type": "number", "default": 60, "minimum": 0 }
 ```
+
+> **v1.9.0 新增**：`transientRetryStatusCodes`（瞬态整轮自动重试触发状态码，默认 [429,503]，与轮换状态码解耦）+ `transientRetryTimes`（自动重试次数，默认 3，0 禁用）。`apiKeyRotationStatusCodes` 默认加入 503。
 
 ## 6. 命令与 UI
 
@@ -337,41 +378,44 @@ pickNextApiKey(secrets, mode):
 | `tokenrhythm.setApiKey`（保留） | 兼容旧版：设置单一 key（写入新格式单元素列表） |
 | `tokenrhythm.setModelPreset` 等 | 不变 |
 
-## 7. 实施步骤（Phase 顺序）
+## 7. 实施步骤（已全部完成）
 
-1. **Phase 1** `src/keyManager.ts`：数据模型 + 迁移 + 状态管理 + 选择逻辑
-2. **Phase 2** `src/balanceCheck.ts`：余额查询 + TTL 缓存 + 手动检测
-3. **Phase 3** `package.json` 设置 + 命令 + `package.nls*.json` + `localize.ts`
-4. **Phase 4** `extension.ts`：注册 `manageApiKeys` 命令（QuickPick 全部动作）
-5. **Phase 5** `provider.ts`：聊天请求轮换循环接入（核心）
-6. **Phase 6** `commitMessageGenerator.ts`：Git 提交轮换接入
-7. **Phase 7** `provideModel.ts` + `modelSync.ts`：主 key 接入
-8. **Phase 8** 文档：AGENTS.md + Walkthrough
-9. **Phase 9** 验证（见下）
+1. **Phase 1** `src/keyManager.ts`：数据模型 + 迁移 + 状态管理 + 选择逻辑 ✅
+2. **Phase 2** `src/balanceCheck.ts`：余额查询 + TTL 缓存 + 手动检测 ✅（v1.9.0 升级为详情查询）
+3. **Phase 3** `package.json` 设置 + 命令 + `package.nls*.json` + `localize.ts` ✅
+4. **Phase 4** `extension.ts`：注册 `manageApiKeys` 命令（QuickPick 全部动作 + 批量导入 + 编辑 + 余额显示）✅
+5. **Phase 5** `provider.ts`：聊天请求轮换循环接入（核心 + 瞬态整轮重试）✅
+6. **Phase 6** `commitMessageGenerator.ts`：Git 提交轮换接入（+ 瞬态重试 + 失败原因精确提取）✅
+7. **Phase 7** `provideModel.ts` + `modelSync.ts`：主 key 接入 ✅
+8. **Phase 8** 文档：AGENTS.md + Walkthrough ✅
+9. **Phase 9** 验证（见下）✅
 
-## 8. 验证计划
+## 8. 验证计划（已执行）
 
-| # | 场景 | 预期 |
-|---|------|------|
-| V1 | `npm run compile` + `npx tsc --noEmit` | 零错误 |
-| V2 | key A（有效+cookie）+ key B（余额≤0+cookie），rotation 聊天 | 预检跳过 B 用 A，成功响应；日志含脱敏 key |
-| V3 | `manageApiKeys` 显示 | B 显示"不可用(余额不足)"，A 显示"可用" |
-| V4 | 对 B 检测可用性 | 余额不足 → 保持不可用 |
-| V5 | B 充值后检测可用性 | 标记可用（自愈） |
-| V6 | `minBalanceCny` 调到高于 A 余额 | A 在预检中被跳过，自动用其他 key |
-| V7 | single 模式指向不可用 key | 报错且不切换 |
-| V8 | 无 cookie 的 key + 构造 402 | 被动检测切换 |
-| V9 | cookie 失效 | 回退被动，请求仍能发出 |
-| V10 | Git 提交生成（rotation） | 正常轮换 |
-| V11 | 旧版单 key 迁移 | 自动迁移，旧 key 生效 |
-| V12 | 所有 key 不可用 | 友好报错列出原因 |
+| # | 场景 | 预期 | 状态 |
+|---|------|------|------|
+| V1 | `npm run compile` + `npx tsc --noEmit` | 零错误 | ✅ |
+| V2 | key A（有效+cookie）+ key B（余额≤0+cookie），rotation 聊天 | 预检跳过 B 用 A，成功响应；日志含脱敏 key | ✅ |
+| V3 | `manageApiKeys` 显示 | B 显示"不可用(余额不足)"，A 显示"可用"；v1.9.0 显示两种余额+赠送有效期 | ✅ |
+| V4 | 对 B 检测可用性 | 余额不足 → 保持不可用 | ✅ |
+| V5 | B 充值后检测可用性 | 标记可用（自愈） | ✅ |
+| V6 | `minBalanceCny` 调到高于 A 余额 | A 在预检中被跳过，自动用其他 key | ✅ |
+| V7 | single 模式指向不可用 key | 报错且不切换 | ✅ |
+| V8 | 无 cookie 的 key + 构造 402 | 被动检测切换 | ✅ |
+| V9 | cookie 失效 | 回退被动，请求仍能发出 | ✅ |
+| V10 | Git 提交生成（rotation） | 正常轮换 | ✅ |
+| V11 | 旧版单 key 迁移 | 自动迁移，旧 key 生效 | ✅ |
+| V12 | 所有 key 不可用 | 友好报错列出原因 | ✅ |
+| V13 | 全部 key 503 | 瞬态整轮自动重试（退避），次数用尽才报"请稍后重试" | ✅（v1.9.0） |
 
 ## 9. 边界与已知限制
 
 1. **余额竞态**：预检与请求之间存在时间差（余额刚被其他请求花光），被动检测兜底。
 2. **cookie 会话过期**：QuickPick 显示绑定状态并允许更新；检测时提示重新绑定。
-3. **429 可能为账号级限流**：换 key 不一定有效，但尝试切换无害。
+3. **429/503 可能为账号级/平台级限流**：换 key 不一定有效，但尝试切换无害；全部 key 瞬态失败时整轮自动重试（退避）兜底。
 4. **不改造 `scripts/cookieApi`**：独立 tsconfig，`src/balanceCheck.ts` 独立实现。
 5. **不引入 VS Code proposed API**。
 6. **手动检测的"请求一次"用最小真实聊天请求**（`say ok` + `max_tokens=8`）：余额不足时被 402 拦截不消耗 token；`/v1/models` 不校验余额（余额 < 0 也 200），无法作为可用性判据。
 7. **视觉代理轮内失败不轮换**：见 4.2 D2 设计理由。
+8. **503 瞬态不持久化**：服务端繁忙不写 `available=false`（否则冷却到期后仍被阻挡），仅内存冷却；整轮重试前清空冷却（`resetExhaustedKeys(secrets,false)`）保证 `pickNextApiKey` 能重新选 key。
+9. **余额展示依赖 usage-summary 字段**：充值 = `availableBalanceCny - expiringBalanceCny`，赠送 = `expiringBalanceCny`，有效期 = `nextExpiryAt`（本地时区 YYYY-MM-DD）；赠送为 0 时不显示赠送段，未绑定 cookie 不显示余额。
