@@ -380,7 +380,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 // minBalanceCny is shown with an error icon — such keys are skipped in
                 // rotation mode (proactive pre-check). Query failure → "Balance unknown".
                 const balance = entry.cookie ? balances[i] : undefined;
-                const balanceText = balance !== undefined
+                const balanceText = balance !== undefined && typeof balance === "number"
                     ? `${balance > getMinBalanceCny() ? "$(coin)" : "$(error)"} ¥${balance.toFixed(2)}`
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`
@@ -635,7 +635,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 else if (status === "unavailable") statusText = `$(error) ${l10n("Unavailable")}`;
                 else if (status === "cooldown") statusText = `$(clock) ${l10n("Cooldown")}`;
                 const balance = entry.cookie ? balances[i] : undefined;
-                const balanceText = balance !== undefined
+                const balanceText = balance !== undefined && typeof balance === "number"
                     ? `${balance > getMinBalanceCny() ? "$(coin)" : "$(error)"} ¥${balance.toFixed(2)}`
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`

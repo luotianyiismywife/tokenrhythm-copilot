@@ -1,5 +1,14 @@
 # 更新日志（Changelog）
 
+## v1.8.1 (2026-08-14)
+
+### API Key 管理余额显示崩溃修复
+
+- **修复「管理 API Keys」界面打开即报错**：绑定 `tr_session` cookie 的 key 在余额展示时抛 `TypeError: balance.toFixed is not a function`，导致管理界面无法使用。根因：TokenRhythm 用户中心 API 的 `availableBalanceCny` 金额字段由 `number` 变更为**字符串**返回（金额类字段用字符串可避免 JSON 浮点精度问题），而旧代码从上线起假设该字段为 `number`（`?? 0` 兜底只挡 `null`/`undefined`，挡不住字符串），API 返回类型变更后 `toFixed()` 直接崩溃。
+- **余额解析防御性加固**：`queryAccountBalance` 返回前对 `availableBalanceCny` 强制 `Number()` 转换，非法值兜底 `0`；管理界面两处余额展示（主列表与检测二级界面）增加 `typeof balance === "number"` 类型守卫，异常类型回退显示"余额未知"而非崩溃。
+- **CLI 工具同步加固**：`scripts/cookieApi/cli.ts` 的 `formatMoney` 参数类型放宽为 `number | string`（CLI 查余额走同一条 API，同样会命中字符串金额），统一转 `number` 后格式化，非法值兜底 `"0"`。
+- **测试与开发环境隔离（设计说明）**：扩展运行时余额查询（`src/balanceCheck.ts`，依赖 `vscode`）与 CLI 调试工具余额查询（`scripts/cookieApi/`，纯 Node 独立编译单元）保持**两套独立实现**——运行时出问题时可用 CLI 单独复现、对比排查（本次即通过 CLI 确认了 API 字段类型变化），互不耦合。
+
 ## v1.8.0 (2026-08-13)
 
 ### 跨轮视觉历史持久化

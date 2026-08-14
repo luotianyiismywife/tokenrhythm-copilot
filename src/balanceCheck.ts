@@ -85,7 +85,11 @@ export async function queryAccountBalance(cookie: string): Promise<number> {
         if (body.code !== 0 || !body.data) {
             throw new Error(`余额查询返回错误：code=${body.code} message=${body.message ?? ""}`);
         }
-        return body.data.availableBalanceCny ?? 0;
+        // 防御：API 可能以字符串返回金额（避免浮点精度问题），
+        // 统一强制转为 number，否则调用方 balance.toFixed() 会抛 "toFixed is not a function"。
+        const raw = body.data.availableBalanceCny;
+        const balance = typeof raw === "number" ? raw : Number(raw);
+        return Number.isFinite(balance) ? balance : 0;
     } finally {
         clearTimeout(timer);
     }

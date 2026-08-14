@@ -552,7 +552,7 @@ test/
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
 多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**余额显示**标记），支持动作：添加 Key（可附 label/cookie）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 cookie/key/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`addKeyFlow`、`pickKey`。
 
-**余额显示（2026-08-11）**：主界面 `render()` 与检测二级界面 `showCheckMenu()` 均通过 `getBalanceCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询余额并展示——`$(coin) ¥X.XX`（余额 > minBalanceCny）或 `$(error) ¥X.XX`（余额 ≤ minBalanceCny，即轮询会被跳过的 key）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
+**余额显示（2026-08-11）**：主界面 `render()` 与检测二级界面 `showCheckMenu()` 均通过 `getBalanceCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询余额并展示——`$(coin) ¥X.XX`（余额 > minBalanceCny）或 `$(error) ¥X.XX`（余额 ≤ minBalanceCny，即轮询会被跳过的 key）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。**类型守卫（2026-08-14）**：`balance.toFixed(2)` 前增加 `typeof balance === "number"` 检查，异常类型回退显示"余额未知"（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
 
 #### `showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void>`
 检查是否已显示过欢迎页（通过 `globalState` 的 `WELCOME_SHOWN_KEY` 标记）。如果已标记或已有 API Key，直接返回；否则通过 `workbench.action.openWalkthrough` 命令打开 Walkthrough 页面并标记为已显示。静默处理异常，不阻塞扩展激活。
@@ -886,7 +886,7 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 读取余额查询缓存 TTL（秒，默认 60）。
 
 #### `queryAccountBalance(cookie): Promise<number>`
-`GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回 `availableBalanceCny`；401 抛"cookie 失效"。
+`GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回 `availableBalanceCny`（**API 可能以字符串返回金额避免浮点精度问题，已强制 `Number()` 转换，非法值兜底 0**，2026-08-14 修复：此前假设 number，API 改返回 string 后 `balance.toFixed()` 抛 "toFixed is not a function"）；401 抛"cookie 失效"。
 
 #### `getBalanceCached(cookie, ttlSec): Promise<number | undefined>`
 带 TTL 缓存的余额查询（按 cookie 粒度）；查询失败返回 undefined（不抛错）。
@@ -1163,7 +1163,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 ### 4.27 `scripts/cookieApi/cli.ts`
 
 #### `main(): Promise<void>`
-CLI 入口：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`。依次输出账号汇总、调用日志明细表格（最多 50 条）、按模型/状态/Key 统计。
+CLI 入口：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`。依次输出账号汇总、调用日志明细表格（最多 50 条）、按模型/状态/Key 统计。`formatMoney` 参数类型为 `number | string`（API 金额字段可能以字符串返回，统一转 number 后格式化，非法值兜底 "0"，2026-08-14）。
 
 ---
 

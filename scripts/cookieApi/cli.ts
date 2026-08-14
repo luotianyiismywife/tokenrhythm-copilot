@@ -19,8 +19,10 @@ function formatNumber(n: number): string {
     return n.toLocaleString("en-US");
 }
 
-function formatMoney(n: number, digits = 4): string {
-    return n.toFixed(digits);
+function formatMoney(n: number | string, digits = 4): string {
+    // 防御：API 金额字段可能以字符串返回（避免浮点精度问题），统一转 number
+    const num = typeof n === "number" ? n : Number(n);
+    return Number.isFinite(num) ? num.toFixed(digits) : "0";
 }
 
 function padRight(s: string, width: number): string {
