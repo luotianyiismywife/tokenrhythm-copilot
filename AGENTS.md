@@ -27,7 +27,7 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
-| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `tokenrhythm.apiKeys`），两种模式：`rotation`（默认，轮询使用、跳过不可用 key）/ `single`（仅用当前 key；不可用时按 `tokenrhythm.singleKeyFallback` 设置报错或自动切换并弹窗提示）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`tokenrhythm.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 cookie/key/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**管理主界面与检测二级界面均显示每个 key 的余额**（绑定 cookie 时经 `getBalanceCached` TTL 缓存查询：余额 > `minBalanceCny` 显示 `$(coin) ¥X.XX`，余额 ≤ `minBalanceCny` 显示 `$(error) ¥X.XX` 即轮询会被跳过的 key，查询失败显示 `$(warning) 余额未知`，未绑定 cookie 不显示余额）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因，并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）。旧版单 key `tokenrhythm.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `tokenrhythm.apiKeys`），两种模式：`rotation`（默认，轮询使用、跳过不可用 key）/ `single`（仅用当前 key；不可用时按 `tokenrhythm.singleKeyFallback` 设置报错或自动切换并弹窗提示）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`tokenrhythm.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 cookie/key/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除 cookie 的 key 选择界面）均显示每个 key 的两种余额 + 赠送余额有效期**（绑定 cookie 时经 `getBalanceDetailCached` TTL 缓存查询 `/api/usage-summary`：充值余额 `availableBalanceCny - expiringBalanceCny` 显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error 即轮询会被跳过），赠送余额 `expiringBalanceCny` 显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 有效期，`nextExpiryAt` 本地时区格式化），查询失败显示 `$(warning) 余额未知`，未绑定 cookie 不显示余额）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/503，状态码可配置 `tokenrhythm.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `tokenrhythm.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error` 但用户把 500 加入重试列表）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `tokenrhythm.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
 | **多模型支持** | 内置 14 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `tokenrhythm.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「TokenRhythm」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
@@ -202,7 +202,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │       ├── pickNextApiKey(secrets, apiKeyMode)
   │       │   ├── rotation → 从轮询游标环形扫描第一个可用 key，游标前移
   │       │   ├── single → active key；不可用且 singleKeyFallback=switch → 降级 rotation + 弹窗提示
-  │       │   └── 全部不可用 → 报错 "所有 API Key 均不可用"
+  │       │   └── 全部不可用 → 报错列出脱敏 key+原因（buildAllKeysUnavailableDetail，如 `sk_****abcd: 服务端繁忙 (503)`）
   │       ├── 主动余额预检（balanceCheckEnabled 且有 cookie）:
   │       │   ├── checkKeyBalance(cookie) → 按 cookie 粒度查 /api/usage-summary（TTL 缓存），返回余额值供日志记录
   │       │   ├── 余额 ≤ minBalanceCny（默认 0，即余额 ≤ 0 视为不足）→ markApiKeyExhausted(balance) + continue 换下一个 key
@@ -210,10 +210,12 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │       ├── 用当前 key 构造 requestHeaders → _executeApiRequest()（见步骤 10 协议分发）
   │       ├── 成功 → break 循环；曾不可用 → 自愈置可用
   │       └── 失败: isKeyRotationError(err)（状态码 [401]/[402]/[429]/[503] 或文本 patterns 可配置）
+  │           ├── isTransientRetryError(err)（状态码匹配 transientRetryStatusCodes，默认 [429,503]）→ reason 规范化为瞬态（仅内存冷却不持久化）
   │           ├── getKeyRotationReason(err) → 402/401 → markApiKeyExhausted(持久化 available=false) + continue 换 key
   │           ├── 429/503 → markApiKeyExhausted(仅内存冷却，不持久化) + continue 换 key
   │           ├── 取消/超时/其他错误（400/403/500/网络/IMAGE_SENSITIVE）→ 抛给外层 catch，不轮换
   │           └── failedKeys.size >= keys.length → 报错：列出脱敏 key+原因；含瞬态(429/503)提示"请稍后重试"，否则提示"用管理命令检测"
+  │               └── 瞬态且未达 transientRetryTimes 上限 → 清空瞬态冷却 + 指数退避等待(2s/4s/8s) + 清空 failedKeys + continue 重试整轮
   │
   ├── 10. 根据 apiMode 路由（_executeApiRequest）:
   │
@@ -550,9 +552,9 @@ test/
 扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册七条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设、管理 API Keys）；首次安装时调用 `showWelcomeIfNeeded()` 显示欢迎页引导。
 
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
-多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**余额显示**标记），支持动作：添加 Key（可附 label/cookie）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 cookie/key/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`addKeyFlow`、`pickKey`。
+多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**两种余额+赠送有效期**标记），支持动作：添加 Key（可附 label/cookie）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 cookie/key/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`pickKey`。
 
-**余额显示（2026-08-11）**：主界面 `render()` 与检测二级界面 `showCheckMenu()` 均通过 `getBalanceCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询余额并展示——`$(coin) ¥X.XX`（余额 > minBalanceCny）或 `$(error) ¥X.XX`（余额 ≤ minBalanceCny，即轮询会被跳过的 key）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。**类型守卫（2026-08-14）**：`balance.toFixed(2)` 前增加 `typeof balance === "number"` 检查，异常类型回退显示"余额未知"（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
+**余额显示（2026-08-15 升级为两种余额+赠送有效期）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均通过 `getBalanceDetailCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询完整余额详情并展示——充值余额 `availableBalanceCny - expiringBalanceCny` 显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error 即轮询会被跳过），赠送余额 `expiringBalanceCny` 显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 有效期，`nextExpiryAt` 经 `formatExpiryDate` 本地时区格式化）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。格式化逻辑集中在 `formatBalanceDetailText`（模块级函数）。**类型守卫（2026-08-14）**：`toFixed(2)` 前金额统一经 `queryBalanceDetail` 的 `toNumber` 强制转 number（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
 
 #### `showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void>`
 检查是否已显示过欢迎页（通过 `globalState` 的 `WELCOME_SHOWN_KEY` 标记）。如果已标记或已有 API Key，直接返回；否则通过 `workbench.action.openWalkthrough` 命令打开 Walkthrough 页面并标记为已显示。静默处理异常，不阻塞扩展激活。
@@ -606,6 +608,15 @@ test/
 
 #### `private async ensureApiKey(): Promise<ApiKeyEntry | undefined>`
 确保至少一个 API Key 存在（经 keyManager.getApiKeyStore）。无任何 key 时弹出输入框引导添加第一个（写入多 key 存储）。轮换循环在请求前调用，为空时抛出"TokenRhythm API key not found"。
+
+#### `export const REASON_TEXT: Record<string, string>`
+key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid`/`rate_limited`/`server_error`/`api_error`/`unavailable`。供"全部 key 不可用"报错展示（`l10n(REASON_TEXT[reason])`）。
+
+#### `export async function buildAllKeysUnavailableDetail(secrets): Promise<string>`
+构建"全部 API Key 均不可用"的脱敏原因详情：遍历 store 中每个 key，用 `getKeyUnavailableReason` 取当前状态原因（冷却中/持久化不可用/余额不足），生成 `sk_****abcd: 服务端繁忙 (503)` 列表（`; ` 连接）。供 provider 与 gitCommit 的兜底报错（`pickNextApiKey` 返回 undefined 时）展示。
+
+#### `export async function tryTransientRetryRound(secrets, retryCount, maxRetries): Promise<boolean>`
+瞬态失败（429/503）整轮自动重试辅助。达到上限返回 false；否则**清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，不触碰持久化 unavailable——冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效）、指数退避等待（2s/4s/8s，上限 8s）后返回 true。供 provider 与 gitCommit 的轮换循环在"全部 key 均因 429/503 失败"时调用，次数由 `tokenrhythm.transientRetryTimes` 配置（默认 3，0 禁用）。
 
 ---
 
@@ -800,8 +811,14 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 #### `getRotationErrorPatterns(): string[]`
 读取触发轮换的错误文本 patterns（默认含"余额不足"/`INSUFFICIENT_BALANCE`/`RATE_LIMITED` 等）。
 
+#### `getTransientRetryStatusCodes(): number[]`
+读取触发"瞬态整轮自动重试"的状态码列表（`tokenrhythm.transientRetryStatusCodes`，默认 [429, 503]——限流/服务端繁忙）。与触发轮换的状态码（`apiKeyRotationStatusCodes`）解耦，可分别配置。
+
 #### `getExhaustedCooldownMin(): number`
 读取 429 瞬态冷却时长（分钟，默认 10）。
+
+#### `getTransientRetryTimes(): number`
+读取瞬态失败整轮自动重试次数（`tokenrhythm.transientRetryTimes`，默认 3，夹取 0-10；0 = 禁用自动重试）。平台繁忙/限流导致全部 key 暂时不可用时自动重试整轮，避免立刻报错。
 
 #### `getApiKeyStore(secrets): Promise<ApiKeyStore>`
 读取并缓存 store；自动迁移旧版单 key（`tokenrhythm.apiKey`）为单元素列表；JSON 损坏时回退修复。
@@ -824,14 +841,23 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 #### `isApiKeyEligible(entry): boolean`
 判断 entry 是否可被选中（非持久化不可用、非冷却中）。
 
+#### `hasTransientExhaustedKey(secrets): Promise<boolean>`
+是否存在处于瞬态冷却中的 key（429 限流 / 503 服务端繁忙）。供"全部 key 不可选"时判断是否值得自动重试整轮（平台繁忙通常很快恢复）。
+
 #### `isKeyRotationError(err): boolean`
 判定错误是否应触发 key 轮换：状态码 `[code]`/`status code` 匹配配置列表，或错误文本包含任一 patterns（不区分大小写）。
+
+#### `isTransientRetryError(err): boolean`
+判定错误是否为"瞬态类"（平台繁忙/限流，可能很快恢复 → 值得整轮自动重试）：状态码匹配 `transientRetryStatusCodes`（默认 [429, 503]）。与 `isKeyRotationError` 解耦——触发轮换与触发自动重试的状态码可分别配置。
 
 #### `isTransientExhaustedReason(reason): boolean`
 判断失效原因是否为瞬态类（`rate_limited`/`server_error`）。
 
 #### `getKeyRotationReason(err): string`
 从轮换错误中提取失效原因（基于状态码+文本，比 patterns 精确）：402/`INSUFFICIENT_BALANCE`/"余额不足" → `balance`；401 → `invalid`；429/`RATE_LIMITED` → `rate_limited`；503 → `server_error`；其他 → `api_error`。
+
+#### `getKeyUnavailableReason(entry): string`
+获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：瞬态冷却中（429/503）→ `rate_limited`/`server_error`；持久化不可用（`available=false`）→ `unavailable`；其他（未检测/余额不足）→ `balance`。
 
 #### `getPrimaryApiKey(secrets): Promise<ApiKeyEntry | undefined>`
 获取主 key（模型列表/启动同步等"任意有效 key 即可"场景）：single→active；rotation→第一个可用。
@@ -885,11 +911,23 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 #### `getBalanceCheckIntervalSec(): number`
 读取余额查询缓存 TTL（秒，默认 60）。
 
+#### `interface BalanceDetail`
+`{ balanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt }` — 余额详情（`/api/usage-summary` 的 data 子集，2026-08-15 实测确认字段存在）。平台余额分「充值」与「赠送（限时）」：`expiringBalanceCny` = 赠送余额（到期未用失效），`nextExpiryAt` = 最近到期时间（ISO 8601 UTC，无则 null）；**充值余额 = availableBalanceCny - expiringBalanceCny**。
+
+#### `queryBalanceDetail(cookie): Promise<BalanceDetail>`
+`GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回完整余额详情（balanceCny / availableBalanceCny / expiringBalanceCny / nextExpiryAt）。**API 可能以字符串返回金额避免浮点精度问题，已强制 `Number()` 转换（`toNumber` 辅助），非法值兜底 0**（2026-08-14 修复：此前假设 number，API 改返回 string 后 `balance.toFixed()` 抛 "toFixed is not a function"）；401 抛"cookie 失效"。
+
 #### `queryAccountBalance(cookie): Promise<number>`
-`GET https://tokenrhythm.studio/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回 `availableBalanceCny`（**API 可能以字符串返回金额避免浮点精度问题，已强制 `Number()` 转换，非法值兜底 0**，2026-08-14 修复：此前假设 number，API 改返回 string 后 `balance.toFixed()` 抛 "toFixed is not a function"）；401 抛"cookie 失效"。
+委托 `queryBalanceDetail` 返回 `availableBalanceCny`（向后兼容）。
+
+#### `getBalanceDetailCached(cookie, ttlSec): Promise<BalanceDetail | undefined>`
+带 TTL 缓存的余额**详情**查询（按 cookie 粒度，缓存完整详情供 UI 展示两种余额+有效期）；查询失败返回 undefined（不抛错）。
 
 #### `getBalanceCached(cookie, ttlSec): Promise<number | undefined>`
-带 TTL 缓存的余额查询（按 cookie 粒度）；查询失败返回 undefined（不抛错）。
+带 TTL 缓存的余额查询（委托 `getBalanceDetailCached` 返回可用余额数值）；查询失败返回 undefined（不抛错）。
+
+#### `formatExpiryDate(iso: string | null | undefined): string`
+格式化到期时间为 `YYYY-MM-DD`（本地时区）；无到期或非法日期返回空字符串。供管理界面展示赠送余额有效期。
 
 #### `checkKeyBalance(cookie): Promise<{ sufficient: boolean; balance?: number }>`
 检查余额是否充足并返回查询到的余额值（供日志/管理界面展示）。判定：余额 > minBalanceCny（默认 0，即余额 ≤ 0 视为不足）→ `sufficient=true`；查询失败（cookie 失效/网络）→ `{sufficient: true}`（不阻塞请求，回退被动检测——余额不足时 API 返回 402 触发轮换）。
@@ -1485,7 +1523,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 确保 API Key 存在（经 keyManager.getApiKeyStore）；无任何 key 时弹输入框引导添加第一个。
 
 #### `performCommitMsgGeneration(secrets, gitDiff, inputBox, repoPath?): Promise<void>`
-核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → 余额预检（cookie）→ `createMessage` 流式消费；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容）；用户取消立即中止。
+核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → 余额预检（cookie）→ `createMessage` 流式消费；`failedKeys` 跟踪每个 key 失败原因，全部 key 用尽时（`failedKeys.size >= totalKeys`）报错列出脱敏 key+原因并区分瞬态（429/503→"请稍后重试"）与确定性（→"用管理命令检测"）；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容；轮换原因经 `getKeyRotationReason` 提取，修复了原固定 `api_error` 导致 429/503 被持久化为不可用的 bug）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）；用户取消立即中止。
 
 #### `abortCommitGeneration(): void`
 中止提交消息生成。

@@ -19,9 +19,28 @@ const DEFAULT_BASE_URL = "https://tokenrhythm.studio/v1/";
 /** 手动检测用的最小聊天请求模型 */
 const TEST_MODEL_ID = "deepseek-v4-flash";
 
-/** 余额查询 TTL 缓存（按 cookie 粒度） */
-interface BalanceCacheEntry {
+/**
+ * 余额详情（GET /api/usage-summary 的 data 子集）。
+ *
+ * 平台余额分为「充值余额」与「赠送（限时）额度」：
+ * - `balanceCny` 账户余额 = 充值 + 赠送（总额）
+ * - `availableBalanceCny` 可用余额 = 可立即使用部分（充值余额 + 未到期的赠送额度）
+ * - `expiringBalanceCny` 限时额度 = 赠送余额（到期后未使用部分失效）
+ * - `nextExpiryAt` 最近到期时间（ISO 8601 UTC，无则 null）
+ *
+ * 充值余额 = availableBalanceCny - expiringBalanceCny。
+ * 实测（2026-08-15）：字段真实存在，`signupReward` 等字段不在本类型内。
+ */
+export interface BalanceDetail {
+    balanceCny: number;
     availableBalanceCny: number;
+    expiringBalanceCny: number;
+    nextExpiryAt: string | null;
+}
+
+/** 余额查询 TTL 缓存（按 cookie 粒度，缓存完整详情） */
+interface BalanceCacheEntry {
+    detail: BalanceDetail;
     checkedAt: number;
 }
 const balanceCache = new Map<string, BalanceCacheEntry>();
@@ -56,11 +75,10 @@ export function getBalanceCheckIntervalSec(): number {
 // ---------------------------------------------------------------------------
 
 /**
- * 查询账号余额（GET /api/usage-summary）。
+ * 查询账号余额详情（GET /api/usage-summary）。
  * @throws 网络错误 / 非 2xx / code!==0 / 401（cookie 失效）
- * @returns availableBalanceCny
  */
-export async function queryAccountBalance(cookie: string): Promise<number> {
+export async function queryBalanceDetail(cookie: string): Promise<BalanceDetail> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -80,36 +98,59 @@ export async function queryAccountBalance(cookie: string): Promise<number> {
         const body = (await response.json()) as {
             code: number;
             message?: string;
-            data?: { availableBalanceCny?: number };
+            data?: {
+                balanceCny?: number | string;
+                availableBalanceCny?: number | string;
+                expiringBalanceCny?: number | string;
+                nextExpiryAt?: string | null;
+            };
         };
         if (body.code !== 0 || !body.data) {
             throw new Error(`余额查询返回错误：code=${body.code} message=${body.message ?? ""}`);
         }
         // 防御：API 可能以字符串返回金额（避免浮点精度问题），
         // 统一强制转为 number，否则调用方 balance.toFixed() 会抛 "toFixed is not a function"。
-        const raw = body.data.availableBalanceCny;
-        const balance = typeof raw === "number" ? raw : Number(raw);
-        return Number.isFinite(balance) ? balance : 0;
+        return {
+            balanceCny: toNumber(body.data.balanceCny),
+            availableBalanceCny: toNumber(body.data.availableBalanceCny),
+            expiringBalanceCny: toNumber(body.data.expiringBalanceCny),
+            nextExpiryAt: typeof body.data.nextExpiryAt === "string" && body.data.nextExpiryAt ? body.data.nextExpiryAt : null,
+        };
     } finally {
         clearTimeout(timer);
     }
 }
 
+/** 防御：API 金额字段可能以字符串返回，统一转 number，非法值兜底 0 */
+function toNumber(v: number | string | undefined): number {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : 0;
+}
+
 /**
- * 带 TTL 缓存的余额查询（按 cookie 粒度）。
- * @returns 余额数值；查询失败返回 undefined（不抛错，调用方回退被动检测）
+ * 查询账号可用余额（GET /api/usage-summary）。
+ * @throws 网络错误 / 非 2xx / code!==0 / 401（cookie 失效）
+ * @returns availableBalanceCny
  */
-export async function getBalanceCached(cookie: string, ttlSec: number): Promise<number | undefined> {
+export async function queryAccountBalance(cookie: string): Promise<number> {
+    return (await queryBalanceDetail(cookie)).availableBalanceCny;
+}
+
+/**
+ * 带 TTL 缓存的余额详情查询（按 cookie 粒度）。
+ * @returns 余额详情；查询失败返回 undefined（不抛错，调用方回退被动检测）
+ */
+export async function getBalanceDetailCached(cookie: string, ttlSec: number): Promise<BalanceDetail | undefined> {
     if (ttlSec > 0) {
         const cached = balanceCache.get(cookie);
         if (cached && Date.now() - cached.checkedAt < ttlSec * 1000) {
-            return cached.availableBalanceCny;
+            return cached.detail;
         }
     }
     try {
-        const balance = await queryAccountBalance(cookie);
-        balanceCache.set(cookie, { availableBalanceCny: balance, checkedAt: Date.now() });
-        return balance;
+        const detail = await queryBalanceDetail(cookie);
+        balanceCache.set(cookie, { detail, checkedAt: Date.now() });
+        return detail;
     } catch (err) {
         logger.warn("key.balanceCheck", {
             cookie: maskCookieForLog(cookie),
@@ -117,6 +158,33 @@ export async function getBalanceCached(cookie: string, ttlSec: number): Promise<
         });
         return undefined;
     }
+}
+
+/**
+ * 带 TTL 缓存的余额查询（按 cookie 粒度，返回可用余额）。
+ * @returns 可用余额数值；查询失败返回 undefined（不抛错，调用方回退被动检测）
+ */
+export async function getBalanceCached(cookie: string, ttlSec: number): Promise<number | undefined> {
+    const detail = await getBalanceDetailCached(cookie, ttlSec);
+    return detail?.availableBalanceCny;
+}
+
+/**
+ * 格式化到期时间为 "YYYY-MM-DD"（本地时区）；无到期或非法日期返回空字符串。
+ * 供管理界面展示赠送余额的有效期。
+ */
+export function formatExpiryDate(iso: string | null | undefined): string {
+    if (!iso) {
+        return "";
+    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+        return "";
+    }
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
 }
 
 /**

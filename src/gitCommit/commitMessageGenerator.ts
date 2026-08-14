@@ -8,19 +8,26 @@ import { ResponsesApi } from "../responses/responsesApi";
 import { getBuiltInModelConfig } from "../models";
 import { getResponsesSupportedModelIds, getAnthropicSupportedModelIds } from "../apiModelList";
 import { logger } from "../logger";
-import { l10n } from "../localize";
+import { l10n, l10nFormat } from "../localize";
 import type { TokenRhythmModelItem } from "../types";
 import {
     addApiKey,
     getApiKeyMode,
     getApiKeyStore,
+    getKeyRotationReason,
     getSingleKeyFallback,
+    getTransientRetryTimes,
+    hasTransientExhaustedKey,
     isKeyRotationError,
+    isTransientExhaustedReason,
+    isTransientRetryError,
     markApiKeyExhausted,
+    maskApiKey,
     pickNextApiKey,
     type ApiKeyEntry,
 } from "../keyManager";
 import { getBalanceCheckEnabled, checkKeyBalance } from "../balanceCheck";
+import { buildAllKeysUnavailableDetail, REASON_TEXT, tryTransientRetryRound } from "../provider";
 
 /**
  * Git commit message generator module.
@@ -300,8 +307,38 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         const singleFallback = getSingleKeyFallback();
         let usedFallbackKey = false; // single mode fell back to rotation
         let response = "";
+        // Track per-key failure reasons so the "all keys exhausted" error can
+        // show which key failed and why (masked), and distinguish transient
+        // failures (429/503 — retry later) from permanent ones (402/401 — check).
+        const failedKeys = new Map<string, string>();
+        const totalKeys = (await getApiKeyStore(secrets)).keys.length;
+        // Transient (429/503) whole-round auto-retry: when every key is busy or
+        // rate-limited, wait with backoff and retry the whole round instead of
+        // failing immediately (platform congestion usually clears within seconds).
+        const maxTransientRetries = getTransientRetryTimes();
+        let transientRetryCount = 0;
 
         while (true) {
+            // If every key has failed at least one round, stop trying.
+            if (totalKeys > 0 && failedKeys.size >= totalKeys) {
+                const detail = [...failedKeys.entries()]
+                    .map(([key, reason]) => `${maskApiKey(key)}: ${l10n(REASON_TEXT[reason] ?? reason)}`)
+                    .join("; ");
+                const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
+                // Platform busy / rate-limited: back off and retry the whole
+                // round automatically instead of failing immediately.
+                if (hasTransient && (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries))) {
+                    transientRetryCount++;
+                    failedKeys.clear();
+                    continue;
+                }
+                logger.warn("commit.key.allUnavailable", { detail });
+                if (hasTransient) {
+                    throw new Error(l10nFormat("All API keys are temporarily unavailable ({0}). Please retry later.", detail));
+                }
+                throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail));
+            }
+
             let entry = await pickNextApiKey(secrets, apiKeyMode);
             if (!entry) {
                 if (apiKeyMode === "single" && singleFallback === "switch" && !usedFallbackKey) {
@@ -309,7 +346,23 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     entry = await pickNextApiKey(secrets, "rotation");
                 }
                 if (!entry) {
-                    throw new Error(l10n("All API keys are unavailable"));
+                    // Every key is excluded (persisted unavailable / cooldown /
+                    // insufficient balance). If any key is merely in transient
+                    // cooldown (429/503), back off and retry the whole round.
+                    if (
+                        (await hasTransientExhaustedKey(secrets)) &&
+                        (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries))
+                    ) {
+                        transientRetryCount++;
+                        failedKeys.clear();
+                        continue;
+                    }
+                    // Show why each key can't be used.
+                    const detail = await buildAllKeysUnavailableDetail(secrets);
+                    logger.warn("commit.key.allUnavailable", { detail });
+                    throw new Error(
+                        l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail)
+                    );
                 }
             }
 
@@ -318,6 +371,7 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
             if (getBalanceCheckEnabled() && entry.cookie) {
                 const check = await checkKeyBalance(entry.cookie);
                 if (!check.sufficient) {
+                    failedKeys.set(entry.value, "balance");
                     await markApiKeyExhausted(secrets, entry.value, "balance");
                     logger.warn("commit.key.rotation", {
                         key: entry.value.slice(0, 6) + "****",
@@ -358,9 +412,23 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     throw err;
                 }
                 if (isKeyRotationError(err)) {
-                    await markApiKeyExhausted(secrets, entry.value, "api_error");
+                    const rawReason = getKeyRotationReason(err);
+                    // Transient errors (platform busy / rate limit, per
+                    // transientRetryStatusCodes) must be kept cooldown-only
+                    // (never persisted unavailable) so the whole-round auto
+                    // retry can actually re-pick the keys. If the raw reason
+                    // isn't already transient (e.g. 500 → api_error but the
+                    // user added 500 to transientRetryStatusCodes), normalize
+                    // it to server_error so markApiKeyExhausted only cools.
+                    const reason =
+                        isTransientRetryError(err) && !isTransientExhaustedReason(rawReason)
+                            ? "server_error"
+                            : rawReason;
+                    failedKeys.set(entry.value, reason);
+                    await markApiKeyExhausted(secrets, entry.value, reason);
                     logger.warn("commit.key.rotation", {
                         key: entry.value.slice(0, 6) + "****",
+                        reason,
                         error: err instanceof Error ? err.message : String(err),
                     });
                     continue; // try next key

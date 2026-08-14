@@ -38,11 +38,17 @@ import {
     getSingleKeyFallback,
     getApiKeyStore,
     getKeyRotationReason,
+    getKeyUnavailableReason,
+    getTransientRetryTimes,
+    hasTransientExhaustedKey,
+    isKeyRotationError,
+    isTransientExhaustedReason,
+    isTransientRetryError,
     pickNextApiKey,
     markApiKeyExhausted,
     markApiKeyAvailable,
+    resetExhaustedKeys,
     addApiKey,
-    isKeyRotationError,
     maskApiKey,
     type ApiKeyEntry,
 } from "./keyManager";
@@ -51,13 +57,54 @@ import { getBalanceCheckEnabled, checkKeyBalance } from "./balanceCheck";
 /**
  * Human-readable labels for key rotation failure reasons (keys are l10n keys).
  */
-const REASON_TEXT: Record<string, string> = {
+export const REASON_TEXT: Record<string, string> = {
     balance: "Balance insufficient",
     invalid: "Key invalid",
     rate_limited: "Rate limited (429)",
     server_error: "Server error (503)",
     api_error: "API error",
+    unavailable: "Unavailable",
 };
+
+/**
+ * 构建"全部 API Key 均不可用"的脱敏原因详情（供报错信息展示）。
+ * 遍历 store 中每个 key，用其当前状态（冷却中 / 持久化不可用 / 余额不足）
+ * 生成 `sk_****abcd: 原因` 列表。
+ */
+export async function buildAllKeysUnavailableDetail(secrets: vscode.SecretStorage): Promise<string> {
+    const store = await getApiKeyStore(secrets);
+    return store.keys
+        .map((entry) => {
+            const reason = getKeyUnavailableReason(entry);
+            return `${maskApiKey(entry.value)}: ${l10n(REASON_TEXT[reason] ?? reason)}`;
+        })
+        .join("; ");
+}
+
+/**
+ * 瞬态失败（429/503）整轮自动重试辅助。
+ * 平台繁忙 / 限流导致全部 key 暂时不可用时，等待指数退避（2s/4s/8s，上限 8s）
+ * 后重试整轮——**必须清空瞬态冷却**（`resetExhaustedKeys(secrets, false)`），
+ * 否则冷却期间 `pickNextApiKey` 会跳过全部 key，重试永远不会真正发生。
+ * @param retryCount 已执行的重试次数（0 起）
+ * @param maxRetries 允许的最大重试次数
+ * @returns 是否执行了重试（已等待退避并清理冷却）；达到上限返回 false
+ */
+export async function tryTransientRetryRound(
+    secrets: vscode.SecretStorage,
+    retryCount: number,
+    maxRetries: number
+): Promise<boolean> {
+    if (retryCount >= maxRetries) {
+        return false;
+    }
+    // 清空瞬态冷却（不触碰持久化 unavailable），否则 pickNextApiKey 会跳过全部 key
+    await resetExhaustedKeys(secrets, false);
+    const delayMs = Math.min(2000 * Math.pow(2, retryCount), 8000);
+    logger.warn("key.transientRetry", { count: retryCount + 1, maxRetries, delayMs });
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    return true;
+}
 
 /**
  * Native Copilot Token Indicator
@@ -381,6 +428,11 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             // show which key failed and why (masked), and distinguish transient
             // failures (429/503 — retry later) from permanent ones (402/401 — check).
             const failedKeys = new Map<string, string>();
+            // Transient (429/503) whole-round auto-retry: when every key is busy or
+            // rate-limited, wait with backoff and retry the whole round instead of
+            // failing immediately (platform congestion usually clears within seconds).
+            const maxTransientRetries = getTransientRetryTimes();
+            let transientRetryCount = 0;
 
             const firstEntry = await this.ensureApiKey();
             if (!firstEntry) {
@@ -395,8 +447,15 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                     const detail = [...failedKeys.entries()]
                         .map(([key, reason]) => `${maskApiKey(key)}: ${l10n(REASON_TEXT[reason] ?? reason)}`)
                         .join("; ");
-                    logger.warn("key.allUnavailable", { detail });
                     const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
+                    // Platform busy / rate-limited: back off and retry the whole
+                    // round automatically instead of failing immediately.
+                    if (hasTransient && (await tryTransientRetryRound(this.secrets, transientRetryCount, maxTransientRetries))) {
+                        transientRetryCount++;
+                        failedKeys.clear();
+                        continue;
+                    }
+                    logger.warn("key.allUnavailable", { detail });
                     if (hasTransient) {
                         throw new Error(l10nFormat("All API keys are temporarily unavailable ({0}). Please retry later.", detail));
                     }
@@ -412,8 +471,23 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                         currentEntry = await pickNextApiKey(this.secrets, "rotation");
                     }
                     if (!currentEntry) {
-                        logger.warn("key.allUnavailable", {});
-                        throw new Error(l10n("All API keys are unavailable"));
+                        // Every key is excluded (persisted unavailable / cooldown /
+                        // insufficient balance). If any key is merely in transient
+                        // cooldown (429/503), back off and retry the whole round.
+                        if (
+                            (await hasTransientExhaustedKey(this.secrets)) &&
+                            (await tryTransientRetryRound(this.secrets, transientRetryCount, maxTransientRetries))
+                        ) {
+                            transientRetryCount++;
+                            failedKeys.clear();
+                            continue;
+                        }
+                        // Show why each key can't be used.
+                        const detail = await buildAllKeysUnavailableDetail(this.secrets);
+                        logger.warn("key.allUnavailable", { detail });
+                        throw new Error(
+                            l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail)
+                        );
                     }
                 }
 
@@ -498,7 +572,18 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                         throw err; // timeout (outer catch shows friendly message)
                     }
                     if (isKeyRotationError(err)) {
-                        const reason = getKeyRotationReason(err);
+                        const rawReason = getKeyRotationReason(err);
+                        // Transient errors (platform busy / rate limit, per
+                        // transientRetryStatusCodes) must be kept cooldown-only
+                        // (never persisted unavailable) so the whole-round auto
+                        // retry can actually re-pick the keys. If the raw reason
+                        // isn't already transient (e.g. 500 → api_error but the
+                        // user added 500 to transientRetryStatusCodes), normalize
+                        // it to server_error so markApiKeyExhausted only cools.
+                        const reason =
+                            isTransientRetryError(err) && !isTransientExhaustedReason(rawReason)
+                                ? "server_error"
+                                : rawReason;
                         failedKeys.set(currentEntry.value, reason);
                         await markApiKeyExhausted(this.secrets, currentEntry.value, reason);
                         logger.warn("key.rotation", {

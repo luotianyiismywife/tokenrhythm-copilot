@@ -25,7 +25,14 @@ import {
     updateKeyAvailability,
     type ApiKeyEntry,
 } from "./keyManager";
-import { testKeyAvailability, getBalanceCached, getBalanceCheckIntervalSec, getMinBalanceCny } from "./balanceCheck";
+import {
+    testKeyAvailability,
+    getBalanceCheckIntervalSec,
+    getBalanceDetailCached,
+    getMinBalanceCny,
+    formatExpiryDate,
+    type BalanceDetail,
+} from "./balanceCheck";
 import { getVisionSupportedModelIds } from "./apiModelList";
 
 // ---- Walkthrough / Welcome constants ----
@@ -35,6 +42,27 @@ const WELCOME_SHOWN_KEY = "tokenrhythm.welcomeShown";
 
 /** Walkthrough contribution ID (publisher.extension#walkthroughId). */
 const WALKTHROUGH_ID = "luotianyiismywife.tokenrhythm-copilot-provider#tokenRhythmGettingStarted";
+
+/**
+ * 格式化余额详情为显示文本：充值余额 + 赠送余额（含有效期）。
+ * 平台余额分「充值」与「赠送（限时）额度」两部分，分开显示；
+ * 赠送余额 > 0 或存在到期时间时附加到期日（如 "（至 2026-09-01）"）。
+ * 充值余额 ≤ minBalanceCny 时以 error 图标标记（轮询会被跳过）。
+ */
+function formatBalanceDetailText(detail: BalanceDetail | undefined, minBalance: number): string {
+    if (!detail) {
+        return "";
+    }
+    const recharge = detail.availableBalanceCny - detail.expiringBalanceCny;
+    const gift = detail.expiringBalanceCny;
+    const rechargeIcon = recharge > minBalance ? "$(coin)" : "$(error)";
+    const parts: string[] = [`${rechargeIcon} ${l10n("Recharge")} ¥${recharge.toFixed(2)}`];
+    if (gift > 0) {
+        const expiry = formatExpiryDate(detail.nextExpiryAt);
+        parts.push(`$(gift) ${l10n("Gift")} ¥${gift.toFixed(2)}${expiry ? l10nFormat(" (until {0})", expiry) : ""}`);
+    }
+    return parts.join(" · ");
+}
 
 export function activate(context: vscode.ExtensionContext) {
     // Initialize logger
@@ -350,13 +378,14 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
         if (store.keys.length === 0) {
             items.push({ label: l10n("No API keys configured"), kind: vscode.QuickPickItemKind.Separator });
         } else {
-            // Fetch balances for cookie-bound keys (TTL-cached; query failure → undefined).
+            // Fetch balance details for cookie-bound keys (TTL-cached; query failure → undefined).
             // The balance is shown per key so users can see which keys are low on funds
-            // and understand why rotation skips them.
-            const balances = await Promise.all(
+            // and understand why rotation skips them. Balance is split into recharge
+            // (充值) and gift/expiring (赠送) parts; the gift part shows its expiry date.
+            const balanceDetails = await Promise.all(
                 store.keys.map((entry) =>
                     entry.cookie
-                        ? getBalanceCached(entry.cookie, getBalanceCheckIntervalSec())
+                        ? getBalanceDetailCached(entry.cookie, getBalanceCheckIntervalSec())
                         : Promise.resolve(undefined)
                 )
             );
@@ -376,16 +405,15 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     statusText = l10nFormat("Cooldown ({0}s)", String(transient.remainingSec));
                 }
                 const isActive = isSingleMode && i === store.activeIndex;
-                // Balance display: only meaningful when a cookie is bound. Balance ≤
-                // minBalanceCny is shown with an error icon — such keys are skipped in
-                // rotation mode (proactive pre-check). Query failure → "Balance unknown".
-                const balance = entry.cookie ? balances[i] : undefined;
-                const balanceText = balance !== undefined && typeof balance === "number"
-                    ? `${balance > getMinBalanceCny() ? "$(coin)" : "$(error)"} ¥${balance.toFixed(2)}`
+                // Balance display: only meaningful when a cookie is bound. Query
+                // failure → "Balance unknown"; no cookie → no balance shown.
+                const detail = entry.cookie ? balanceDetails[i] : undefined;
+                const balanceText = detail
+                    ? formatBalanceDetailText(detail, getMinBalanceCny())
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`
                         : "";
-                const detail = [
+                const detailLine = [
                     `${statusIcon} ${statusText}`,
                     balanceText,
                     isActive ? `$(star) ${l10n("Current")}` : "",
@@ -395,7 +423,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     .join("  ·  ");
                 items.push({
                     label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
-                    description: detail,
+                    description: detailLine,
                     action: "select",
                     index: i,
                 });
@@ -560,19 +588,43 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
     };
 
     // ---- Select a key (for delete/setActive/check/bind/clear) ----
+    // Shows the same recharge/gift balance + gift expiry info as the main
+    // interface so users can tell keys apart by their balance, not just the
+    // last few chars of the key/cookie.
     const pickKey = async (title: string): Promise<{ index: number; entry: ApiKeyEntry } | undefined> => {
         const store = await getApiKeyStore(secrets);
         if (store.keys.length === 0) {
             vscode.window.showInformationMessage(l10n("No API keys configured"));
             return undefined;
         }
+        const balanceDetails = await Promise.all(
+            store.keys.map((entry) =>
+                entry.cookie
+                    ? getBalanceDetailCached(entry.cookie, getBalanceCheckIntervalSec())
+                    : Promise.resolve(undefined)
+            )
+        );
         const picked = await vscode.window.showQuickPick(
-            store.keys.map((entry, i) => ({
-                label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
-                description: entry.cookie ? `$(key) ${maskCookie(entry.cookie)}` : undefined,
-                index: i,
-                entry,
-            })),
+            store.keys.map((entry, i) => {
+                const detail = entry.cookie ? balanceDetails[i] : undefined;
+                const balanceText = detail
+                    ? formatBalanceDetailText(detail, getMinBalanceCny())
+                    : entry.cookie
+                        ? `$(warning) ${l10n("Balance unknown")}`
+                        : "";
+                const desc = [
+                    entry.cookie ? `$(key) ${maskCookie(entry.cookie)}` : undefined,
+                    balanceText || undefined,
+                ]
+                    .filter(Boolean)
+                    .join("  ·  ");
+                return {
+                    label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
+                    description: desc || undefined,
+                    index: i,
+                    entry,
+                };
+            }),
             { title, ignoreFocusOut: true }
         );
         if (!picked) {
@@ -617,12 +669,13 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             const store = await getApiKeyStore(secrets);
             const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
-            // Fetch balances for cookie-bound keys (TTL-cached) so the sub-menu
-            // shows each key's current balance alongside its availability status.
-            const balances = await Promise.all(
+            // Fetch balance details for cookie-bound keys (TTL-cached) so the
+            // sub-menu shows each key's recharge/gift balance and the gift expiry
+            // date alongside its availability status.
+            const balanceDetails = await Promise.all(
                 store.keys.map((entry) =>
                     entry.cookie
-                        ? getBalanceCached(entry.cookie, getBalanceCheckIntervalSec())
+                        ? getBalanceDetailCached(entry.cookie, getBalanceCheckIntervalSec())
                         : Promise.resolve(undefined)
                 )
             );
@@ -634,9 +687,9 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 if (status === "available") statusText = `$(check) ${l10n("Available")}`;
                 else if (status === "unavailable") statusText = `$(error) ${l10n("Unavailable")}`;
                 else if (status === "cooldown") statusText = `$(clock) ${l10n("Cooldown")}`;
-                const balance = entry.cookie ? balances[i] : undefined;
-                const balanceText = balance !== undefined && typeof balance === "number"
-                    ? `${balance > getMinBalanceCny() ? "$(coin)" : "$(error)"} ¥${balance.toFixed(2)}`
+                const detail = entry.cookie ? balanceDetails[i] : undefined;
+                const balanceText = detail
+                    ? formatBalanceDetailText(detail, getMinBalanceCny())
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`
                         : "";

@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.8.1",
+	"version": "1.9.0",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -401,11 +401,26 @@
 					"default": ["余额不足", "insufficient balance", "INSUFFICIENT_BALANCE", "balance", "RATE_LIMITED", "UPSTREAM_RATE_LIMITED"],
 					"description": "%config.apiKeyRotationErrorPatterns.desc%"
 				},
+				"tokenrhythm.transientRetryStatusCodes": {
+					"type": "array",
+					"items": {
+						"type": "number"
+					},
+					"default": [429, 503],
+					"description": "%config.transientRetryStatusCodes.desc%"
+				},
 				"tokenrhythm.apiKeyExhaustedCooldownMin": {
 					"type": "number",
 					"default": 10,
 					"minimum": 0,
 					"description": "%config.apiKeyExhaustedCooldownMin.desc%"
+				},
+				"tokenrhythm.transientRetryTimes": {
+					"type": "number",
+					"default": 3,
+					"minimum": 0,
+					"maximum": 10,
+					"description": "%config.transientRetryTimes.desc%"
 				},
 				"tokenrhythm.balanceCheckEnabled": {
 					"type": "boolean",

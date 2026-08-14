@@ -1,5 +1,25 @@
 # 更新日志（Changelog）
 
+## v1.9.0 (2026-08-15)
+
+### API Key 管理界面显示两种余额与赠送有效期
+
+- **充值/赠送余额分开显示**：TokenRhythm 平台余额分为「充值」与「赠送（限时额度）」两部分——赠送额度到期后未使用部分将失效。现在「管理 API Keys」的所有界面（主界面、检测二级界面、删除/设当前/编辑/绑定 Cookie 时的 key 选择界面）都会显示每个 key 的**充值余额**（`$(coin) 充值 ¥X.XX`，低于 `minBalanceCny` 时显示 error 图标——即轮询会被跳过的 key）与**赠送余额**（`$(gift) 赠送 ¥Y.YY`，仅在 > 0 时显示）。
+- **赠送余额显示有效期**：赠送余额附带最近到期日期（`（至 YYYY-MM-DD）`，按本地时区格式化），用户可直观看到赠送额度还剩多久失效。
+- **余额详情查询**：`balanceCheck.ts` 升级为查询完整余额详情（`balanceCny` / `availableBalanceCny` / `expiringBalanceCny` / `nextExpiryAt`，实测确认字段存在），TTL 缓存按 cookie 粒度缓存完整详情；充值余额 = 可用余额 - 赠送余额。
+- **删除/选择 key 页面不再靠 key 后几位辨认**：`pickKey` 选择界面（删除、设当前、编辑、绑定/清除 Cookie 共用）现在显示与主界面一致的余额信息，配合 cookie 脱敏尾部可准确区分同 cookie 下的多个 key。
+
+### 全部 API Key 不可用时报错列出每个 key 的原因
+
+- **详细原因替代简单报错**：全部 key 用尽或 `pickNextApiKey` 无可用 key 时，报错不再只有「所有 API Key 均不可用」，而是列出每个 key 的脱敏 ID + 具体原因，如 `所有 API Key 暂时不可用（sk_****dknc: 服务端繁忙 (503); sk_****g-34: 服务端繁忙 (503)），请稍后重试。`，并区分「瞬态失败请稍后重试」（429/503）与「确定性失败请检测」（402/401）。聊天请求与 Git 提交消息生成两处均生效。
+- **新增 `buildAllKeysUnavailableDetail`**：从 key 当前状态（冷却中 / 持久化不可用 / 余额不足）生成脱敏原因列表，`pickNextApiKey` 兜底报错同样带上每个 key 的原因。
+
+### 瞬态错误（平台繁忙/限流）自动重试
+
+- **503 不再立即报错**：全部 key 均因**瞬态错误**（默认 429 限流 / 503 服务端繁忙）失败时，自动重试整轮——指数退避等待（2s/4s/8s，上限 8s），重试前清空瞬态冷却（否则冷却期间选 key 会跳过全部 key，重试无效），最多重试 `tokenrhythm.transientRetryTimes` 次（默认 3，0 = 禁用）后才报错。
+- **触发重试的状态码可配置**：新增设置 `tokenrhythm.transientRetryStatusCodes`（默认 `[429, 503]`），与触发轮换的状态码（`tokenrhythm.apiKeyRotationStatusCodes`）**解耦**，可分别配置。错误命中重试列表但原因非瞬态时（如用户把 500 加入重试列表）规范化为瞬态处理——仅内存冷却不持久化，保证整轮重试可重新选 key。
+- **Git 提交消息生成同样支持**：commit 生成器的轮换循环接入相同的瞬态重试机制；轮换原因改用 `getKeyRotationReason` 精确提取（修复了原固定 `api_error` 导致 429/503 被持久化为不可用的 bug）。
+
 ## v1.8.1 (2026-08-14)
 
 ### API Key 管理余额显示崩溃修复

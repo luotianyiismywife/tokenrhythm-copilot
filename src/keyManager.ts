@@ -87,10 +87,24 @@ export function getRotationErrorPatterns(): string[] {
     ]);
 }
 
+/** 读取触发"瞬态整轮自动重试"的状态码列表（默认 [429, 503]——限流/服务端繁忙） */
+export function getTransientRetryStatusCodes(): number[] {
+    return getConfig().get<number[]>("transientRetryStatusCodes", [429, 503]);
+}
+
 /** 读取 429 瞬态冷却时长（分钟，默认 10） */
 export function getExhaustedCooldownMin(): number {
     const v = getConfig().get<number>("apiKeyExhaustedCooldownMin", 10);
     return Number.isFinite(v) && v >= 0 ? v : 10;
+}
+
+/** 读取瞬态失败（429/503）整轮自动重试次数（默认 3，夹取 0-10） */
+export function getTransientRetryTimes(): number {
+    const v = getConfig().get<number>("transientRetryTimes", 3);
+    if (!Number.isFinite(v)) {
+        return 3;
+    }
+    return Math.min(10, Math.max(0, Math.floor(v)));
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +238,15 @@ export function isApiKeyEligible(entry: ApiKeyEntry): boolean {
 }
 
 /**
+ * 是否存在处于瞬态冷却中的 key（429 限流 / 503 服务端繁忙）。
+ * 供"全部 key 不可选"时判断是否值得自动重试整轮（平台繁忙通常很快恢复）。
+ */
+export async function hasTransientExhaustedKey(secrets: vscode.SecretStorage): Promise<boolean> {
+    const store = await getApiKeyStore(secrets);
+    return store.keys.some((entry) => getTransientExhaustedInfo(entry.value) !== undefined);
+}
+
+/**
  * 判断错误是否应触发 key 轮换。
  * 匹配规则：状态码出现在配置列表 `[code]`/`status code`，或错误文本包含任一 patterns。
  */
@@ -241,6 +264,21 @@ export function isKeyRotationError(err: unknown): boolean {
     // 文本匹配（不区分大小写）
     for (const pattern of patterns) {
         if (pattern && message.includes(pattern.toLowerCase())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 判断错误是否为"瞬态类"（平台繁忙/限流，可能很快恢复 → 值得整轮自动重试）。
+ * 匹配 `tokenrhythm.transientRetryStatusCodes`（默认 [429, 503]）中的状态码。
+ * 与 `isKeyRotationError` 解耦：触发轮换的状态码与触发自动重试的状态码可分别配置。
+ */
+export function isTransientRetryError(err: unknown): boolean {
+    const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    for (const code of getTransientRetryStatusCodes()) {
+        if (message.includes(`[${code}]`) || message.includes(`status ${code}`)) {
             return true;
         }
     }
@@ -348,6 +386,23 @@ export function getKeyRotationReason(err: unknown): string {
         return "server_error";
     }
     return "api_error";
+}
+
+/**
+ * 获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：
+ * - 瞬态冷却中（429/503）→ "rate_limited" / "server_error"
+ * - 持久化不可用（available=false）→ "unavailable"
+ * - 其他（未检测 / 余额不足 / cookie 预检跳过）→ "balance"
+ */
+export function getKeyUnavailableReason(entry: ApiKeyEntry): string {
+    const transient = getTransientExhaustedInfo(entry.value);
+    if (transient) {
+        return transient.reason;
+    }
+    if (entry.available === false) {
+        return "unavailable";
+    }
+    return "balance";
 }
 
 /**
