@@ -18,7 +18,7 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 | 要点 | 说明 |
 |------|------|
 | **登录页需用户手动** | 涉及账号密码（GitHub / Microsoft）的登录**必须由用户亲自完成**，Copilot 不能代输密码（安全红线）。Copilot 打开页面后，提示用户登录，登录完再继续 |
-| **登录态不跨页面共享** | 每次 `open_browser_page` 新开的浏览器页**不保留**之前的登录 cookie。切换页面（如市场→GitHub）需要重新登录。**例外（已验证 2026-08-09）**：同一会话内 GitHub 与市场登录态共享，市场页点"使用 GitHub 登录"可直接登录（见 1.2） |
+| **登录态不跨页面共享** | 每次 `open_browser_page` 新开的浏览器页**不保留**之前的登录 cookie。**例外（已验证 2026-08-09 / 2026-08-14）**：同一浏览器会话内 GitHub 与市场登录态**共享**——市场登录页点「使用 GitHub 登录」即可免密登录（流程见 1.2）。切换新页面/新会话需重新登录 |
 | **元素点击超时** | 微软/谷歌系页面（marketplace、reCAPTCHA）的按钮常因动画/iframe 导致 `click_element` 超时。**解决方案**：用 `run_playwright_code` + `page.evaluate(() => btn.click())` 强制触发 JS 点击 |
 | **iframe 内元素** | reCAPTCHA 验证框、部分对话框在 iframe 内，快照里可见但需用户手动交互（如"选择包含小轿车的图片"） |
 | **文件上传** | 优先用 `page.setInputFiles('input[type=file]', '绝对路径')` 直接设文件（如市场上传 VSIX）。GitHub Release 附件用 `waitForEvent('filechooser')` + `chooser.setFiles()` |
@@ -27,13 +27,13 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 
 ### 1.2 VS Code 市场（Marketplace）上传流程
 
-1. 打开 `https://marketplace.visualstudio.com/manage/publishers/<publisherId>` → 用户登录 Microsoft 账号
+1. 打开 `https://marketplace.visualstudio.com/manage/publishers/<publisherId>` → 用户登录（推荐点「使用 GitHub 登录」按钮免密登录，见下方 ✅ 已验证说明）
 2. 在扩展列表行点 **More Actions...**（`button[aria-label="More Actions..."]`）→ **Update**
 3. 上传对话框出现：`page.setInputFiles('#file-upload', 'xxx.vsix')`
 4. 点击 **Upload** → 出现 reCAPTCHA 验证（**需用户手动完成**）→ 验证后自动上传
 5. 列表显示 `Verifying <新版本>` → 等待审核通过
 
-> ✅ **已验证（2026-08-09）：市场登录页点 "使用 GitHub 登录" 会自动登录，无需再输凭据**——Microsoft 登录页（`login.microsoftonline.com`，URL 带 `githubsi=true`）有 `使用 GitHub 登录` 按钮，点击后若该 GitHub 账号已绑定 Microsoft 账号（如 `azhe-hjm@outlook.com`），会直接进入"保持登录状态?"确认页 → 点"是"即登录成功，跳转管理页。**与浏览器自动化 1.1 的"登录态不跨页面共享"不同**：GitHub（github.com）与市场（marketplace.visualstudio.com）在同一浏览器会话内登录态**共享**，GitHub 登录后市场无需再次登录。但新开浏览器页/新会话仍可能要求重新登录。
+> ✅ **已验证（2026-08-09 / 2026-08-14）：市场登录页点「使用 GitHub 登录」可免密登录**——Microsoft 登录页（`login.microsoftonline.com`，URL 带 `githubsi=true`）有「使用 GitHub 登录」按钮。**注意**：① `githubsi=true` 参数**不会**自动跳 GitHub 授权，必须**手动点击**该按钮；② 该按钮是 JS 事件绑定（`click: $fedCredButtonsControl.fedCredButton_onClick`），**`click_element` 会超时/失败，必须用 `run_playwright_code` + `page.evaluate(() => btn.click())` 强制触发**。完整流程：JS 点击按钮 → 跳 `github.com/login/oauth/authorize`（GitHub 已登录则自动回跳）→ `login.live.com/HandleGithubResponse.srf` → 「保持登录状态?」确认页（显示绑定的 Microsoft 账号，如 `azhe-hjm@outlook.com`）→ 点「是」→ 进入市场管理页（账号显示「天依 洛 (azhe-hjm@outlook.com)」）。GitHub 与市场登录态在同一浏览器会话内**共享**，GitHub 登录后市场无需再次登录；但**新开浏览器页/新会话仍要求重新登录**。
 
 > ⚠️ **教训（2026-08-10 v1.6.3）**：市场上传的 reCAPTCHA 验证**必须能访问 google.com**。中国大陆网络下内置浏览器会报"无法连接到 reCAPTCHA 服务"（`google.com/recaptcha/api2/clr` 被 CSP `connect-src` 拦截 + `ERR_ABORTED`/`ERR_BLOCKED_BY_ORB`），**刷新无效**。此时应**改用外部浏览器（Chrome/Edge，配代理插件）手动上传**，或开代理后重试内置浏览器。
 
