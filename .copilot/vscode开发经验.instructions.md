@@ -19,6 +19,7 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 |------|------|
 | **登录页需用户手动** | 涉及账号密码（GitHub / Microsoft）的登录**必须由用户亲自完成**，Copilot 不能代输密码（安全红线）。Copilot 打开页面后，提示用户登录，登录完再继续 |
 | **登录态不跨页面共享** | 每次 `open_browser_page` 新开的浏览器页**不保留**之前的登录 cookie。**例外（已验证 2026-08-09 / 2026-08-14）**：同一浏览器会话内 GitHub 与市场登录态**共享**——市场登录页点「使用 GitHub 登录」即可免密登录（流程见 1.2）。切换新页面/新会话需重新登录 |
+| **复用已登录页面跳转（推荐）** | 需要打开同站点新 URL 时，**不要 `open_browser_page` 新开页**（会丢登录态），直接对用户已共享的已登录页用 `navigate_page`（type=url）跳转，登录态保留。**已验证（2026-08-18 v1.10.0 发布）**：把已登录的 GitHub issue 页直接重定向到 `releases/new?tag=v1.10.0`，免登录完成 Release 创建 |
 | **元素点击超时** | 微软/谷歌系页面（marketplace、reCAPTCHA）的按钮常因动画/iframe 导致 `click_element` 超时。**解决方案**：用 `run_playwright_code` + `page.evaluate(() => btn.click())` 强制触发 JS 点击 |
 | **iframe 内元素** | reCAPTCHA 验证框、部分对话框在 iframe 内，快照里可见但需用户手动交互（如"选择包含小轿车的图片"） |
 | **文件上传** | 优先用 `page.setInputFiles('input[type=file]', '绝对路径')` 直接设文件（如市场上传 VSIX）。GitHub Release 附件用 `waitForEvent('filechooser')` + `chooser.setFiles()` |
