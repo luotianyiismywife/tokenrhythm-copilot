@@ -449,7 +449,7 @@
 		"compile": "tsc -p ./ && node scripts/build-info.mjs",
 		"lint": "eslint",
 		"watch": "tsc -watch -p ./",
-		"build": "npx @vscode/vsce package -o extension.vsix",
+		"build": "node scripts/package-vsix.mjs",
 		"postinstall": "node scripts/copy-tokenizer.js"
 	},
 	"dependencies": {

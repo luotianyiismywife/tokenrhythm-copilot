@@ -480,6 +480,7 @@ src/
 scripts/
 ├── tsconfig.json                        # scripts 独立编译配置（输出到 scripts/out）
 ├── build-info.mjs                       # 编译元信息生成（out/build-info.json + .copilot/build-log.md，compile 后自动运行）
+├── package-vsix.mjs                     # VSIX 打包（npm run build），输出名固定 <name>-<version>.vsix
 ├── check-new-models.mjs                 # 检查 API 新模型
 ├── copy-tokenizer.js                    # 拷贝 tokenizer 资源
 ├── export-call-logs.mjs                 # 导出全部调用日志为 CSV（cookie 认证）
@@ -536,6 +537,7 @@ test/
 | `test-vision-history.mjs` | ~150 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
 | `test-anthropic-tool-result-merge.mjs` | ~170 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
 | `build-info.mjs` | ~90 | 编译元信息生成：`npm run compile` 后自动运行，写入 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加 `.copilot/build-log.md`（编译日志） |
+| `package-vsix.mjs` | ~20 | VSIX 打包脚本（`npm run build`）：从 `package.json` 读取版本号，输出名固定为 `tokenrhythm-copilot-<version>.vsix`（如 `tokenrhythm-copilot-1.10.0.vsix`，发布命名规范，不用 vsce 默认的 `extension.vsix`） |
 | `tokenizer/tokenizerManager.ts` | ~115 | o200k_base 分词器管理 (含 LRU 缓存) |
 | `tokenizer/imageUtils.ts` | ~130 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
 | `vision/types.ts` | ~53 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
@@ -1648,7 +1650,8 @@ npm run watch
 
 # 打包 VSIX
 npm run build
-# 等效于: npx @vscode/vsce package -o extension.vsix
+# 等效于: node scripts/package-vsix.mjs
+# 输出名固定为 <name>-<version>.vsix（如 tokenrhythm-copilot-1.10.0.vsix），不使用 vsce 默认的 extension.vsix
 ```
 
 > `npm run compile` 在 `tsc` 编译后自动运行 `scripts/build-info.mjs`，生成 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加记录到 `.copilot/build-log.md`。详见 6.1b「编译产物元信息铁律」。
