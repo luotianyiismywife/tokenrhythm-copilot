@@ -33,7 +33,7 @@ export interface ApiKeyStore {
 }
 
 /** key 使用模式 */
-export type ApiKeyMode = "rotation" | "single";
+export type ApiKeyMode = "rotation" | "single" | "sticky";
 
 /** single 模式当前 key 不可用时的行为 */
 export type SingleKeyFallback = "error" | "switch";
@@ -44,7 +44,7 @@ const LEGACY_KEY = "tokenrhythm.apiKey";
 /** 内存缓存：避免每次读取都访问 SecretStorage */
 let storeCache: ApiKeyStore | null = null;
 
-/** 轮询游标：模块级，跨请求共享，保证顺序轮换 */
+/** 轮询游标：模块级，跨请求共享。rotation 模式选中后前移（顺序轮换）；sticky 模式选中后钉住不前移（固定使用） */
 let rotationIndex = 0;
 
 /** 瞬态失效表：429 限流等"可能恢复"的失效，带冷却时间 */
@@ -58,10 +58,18 @@ function getConfig(): vscode.WorkspaceConfiguration {
     return vscode.workspace.getConfiguration("tokenrhythm");
 }
 
-/** 读取 key 使用模式（默认 rotation；非法值回退 rotation） */
+/** 读取 key 使用模式（默认 sticky；非法值回退 sticky） */
 export function getApiKeyMode(): ApiKeyMode {
-    const mode = getConfig().get<string>("apiKeyMode", "rotation");
-    return mode === "single" ? "single" : "rotation";
+    const mode = getConfig().get<string>("apiKeyMode", "sticky");
+    if (mode === "rotation" || mode === "single" || mode === "sticky") {
+        return mode;
+    }
+    return "sticky";
+}
+
+/** 读取当前轮询/粘性游标下标（供 UI 标记 sticky 模式下固定的 key） */
+export function getRotationCursorIndex(): number {
+    return rotationIndex;
 }
 
 /** 读取 single 模式不可用时的行为（默认 error；非法值回退 error） */
@@ -292,6 +300,7 @@ export function isTransientRetryError(err: unknown): boolean {
 /**
  * 获取主 key（模型列表 / 启动同步等"任意有效 key 即可"的场景）。
  * - single → active key（跳过瞬态冷却与持久化不可用）
+ * - sticky → 当前钉住的 key（不可用时从游标环形扫描第一个可用 key）
  * - rotation → 第一个可用的 key
  * 全部不可用时返回 undefined。注意：模型列表不校验余额（实测），无需关心 available 余额标记。
  */
@@ -306,7 +315,7 @@ export async function getPrimaryApiKey(secrets: vscode.SecretStorage): Promise<A
         return isApiKeyEligible(entry) ? entry : undefined;
     }
 
-    // rotation：从游标开始环形扫描
+    // rotation / sticky：从游标开始环形扫描
     for (let i = 0; i < store.keys.length; i++) {
         const entry = store.keys[(rotationIndex + i) % store.keys.length];
         if (isApiKeyEligible(entry)) {
@@ -318,7 +327,10 @@ export async function getPrimaryApiKey(secrets: vscode.SecretStorage): Promise<A
 
 /**
  * 选择下一个要使用的 key。
- * - rotation：从游标开始环形扫描第一个可用 key，游标前移一位
+ * - rotation：从游标开始环形扫描第一个可用 key，游标前移一位（每次请求都换 key）
+ * - sticky：从游标开始环形扫描第一个可用 key，游标钉住不前移（固定使用该 key，
+ *   仅当它失效——余额不足/401/429/503 等——变 ineligible 后下次才会切到下一个并钉住；
+ *   原 key 恢复后不自动切回，保持前缀缓存亲和性）
  * - single：返回 active key（不可用返回 undefined，由调用方按 fallback 决定报错或降级为 rotation）
  */
 export async function pickNextApiKey(
@@ -335,12 +347,16 @@ export async function pickNextApiKey(
         return isApiKeyEligible(entry) ? entry : undefined;
     }
 
-    // rotation：从 rotationIndex 开始顺序查找第一个 eligible 的 key
+    // rotation / sticky：从 rotationIndex 开始顺序查找第一个 eligible 的 key
     for (let i = 0; i < store.keys.length; i++) {
         const idx = (rotationIndex + i) % store.keys.length;
         const entry = store.keys[idx];
         if (isApiKeyEligible(entry)) {
-            rotationIndex = (idx + 1) % store.keys.length; // 游标前移到下一个
+            if (mode === "rotation") {
+                rotationIndex = (idx + 1) % store.keys.length; // 游标前移到下一个
+            } else {
+                rotationIndex = idx; // sticky：钉住当前 key，不前移
+            }
             return entry;
         }
     }

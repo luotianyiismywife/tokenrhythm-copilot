@@ -92,6 +92,7 @@ const zhCN: Record<string, string> = {
 	"Back": "返回",
 	"Select a key to check, or check all": "选择要检测的 Key，或检测全部",
 	"Current": "当前使用",
+	"Pinned": "当前固定",
 	"Cookie bound": "Cookie 已绑定",
 	"Cookie not bound": "未绑定 Cookie",
 	"Balance unknown": "余额未知",

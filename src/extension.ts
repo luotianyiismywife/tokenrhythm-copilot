@@ -14,6 +14,7 @@ import {
     getApiKeyStore,
     getKeyDisplayStatus,
     getPrimaryApiKey,
+    getRotationCursorIndex,
     getTransientExhaustedInfo,
     maskApiKey,
     maskCookie,
@@ -371,8 +372,12 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
     const render = async (): Promise<vscode.QuickPickItem[] | undefined> => {
         const store = await getApiKeyStore(secrets);
         // "Set as Current" / ★ Current marker only make sense in single mode;
-        // in rotation mode they are hidden entirely.
-        const isSingleMode = getApiKeyMode() === "single";
+        // in rotation mode they are hidden entirely. In sticky mode the pinned
+        // key (rotation cursor) is shown as a read-only $(pinned) marker.
+        const keyMode = getApiKeyMode();
+        const isSingleMode = keyMode === "single";
+        const isStickyMode = keyMode === "sticky";
+        const stickyCursor = isStickyMode ? getRotationCursorIndex() : -1;
         const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
         if (store.keys.length === 0) {
@@ -405,6 +410,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     statusText = l10nFormat("Cooldown ({0}s)", String(transient.remainingSec));
                 }
                 const isActive = isSingleMode && i === store.activeIndex;
+                const isPinned = isStickyMode && i === stickyCursor;
                 // Balance display: only meaningful when a cookie is bound. Query
                 // failure → "Balance unknown"; no cookie → no balance shown.
                 const detail = entry.cookie ? balanceDetails[i] : undefined;
@@ -417,6 +423,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     `${statusIcon} ${statusText}`,
                     balanceText,
                     isActive ? `$(star) ${l10n("Current")}` : "",
+                    isPinned ? `$(pinned) ${l10n("Pinned")}` : "",
                     entry.cookie ? `$(key) ${l10n("Cookie bound")}` : `$(key) ${l10n("Cookie not bound")}`,
                 ]
                     .filter(Boolean)

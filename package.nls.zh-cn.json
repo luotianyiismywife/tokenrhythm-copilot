@@ -62,7 +62,8 @@
 	"config.enableResponsesApi.desc": "当 apiMode 为 auto 时，为支持 Responses API 的模型（supports_responses=true，如 qwen3.7-max、deepseek-v4-flash-0731）使用 Responses 协议。**默认关闭** —— TokenRhythm 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认使用更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。",
 	"config.enableAnthropicApi.desc": "当 apiMode 为 auto 时，为启动时探测到 supports_anthropic=true 的模型（来自 /v1/models——动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭** —— Anthropic 端点对部分模型存在兼容性问题（如 DeepSeek 强制思考 + temperature 返回 400），建议使用更成熟的 OpenAI 兼容格式。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。",
 
-	"config.apiKeyMode.desc": "API Key 使用模式：rotation（在所有 key 间轮询，自动跳过不可用的）或 single（仅使用当前 key）。",
+	"config.apiKeyMode.desc": "API Key 使用模式：sticky（默认固定使用一个 key，失效时才切换——前缀缓存命中率最高）、rotation（在所有 key 间轮询，自动跳过不可用的）或 single（仅使用当前 key）。",
+	"config.apiKeyMode.enum.sticky.desc": "默认固定使用一个 API Key（前缀缓存命中率最高），仅当该 key 失效（余额不足/限流/无效等）时切换到下一个可用 key 并固定使用。",
 	"config.apiKeyMode.enum.rotation.desc": "在所有 API Key 间轮询，自动跳过不可用的 key。",
 	"config.apiKeyMode.enum.single.desc": "仅使用当前选中的 API Key。",
 	"config.singleKeyFallback.desc": "single 模式下当前 key 不可用时的行为：error（直接报错不切换）或 switch（自动切换到下一个可用 key 并弹窗提示）。",

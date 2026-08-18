@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.9.0",
+	"version": "1.10.0",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -367,9 +367,10 @@
 				},
 				"tokenrhythm.apiKeyMode": {
 					"type": "string",
-					"enum": ["rotation", "single"],
-					"default": "rotation",
+					"enum": ["sticky", "rotation", "single"],
+					"default": "sticky",
 					"enumDescriptions": [
+						"%config.apiKeyMode.enum.sticky.desc%",
 						"%config.apiKeyMode.enum.rotation.desc%",
 						"%config.apiKeyMode.enum.single.desc%"
 					],
