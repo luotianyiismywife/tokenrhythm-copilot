@@ -22,8 +22,6 @@
 
 **TokenRhythm Copilot Provider** 是一个 VS Code 扩展，它将 TokenRhythm 平台的 AI 语言模型集成到 GitHub Copilot Chat 中。用户可以在 VS Code 的 Copilot Chat 界面中选择并使用 TokenRhythm 提供的各种模型（如 DeepSeek、GLM、Qwen、MiMo、MiniMax、Kimi 等系列），享受智能代码补全、聊天对话、Git 提交消息生成等功能。
 
-> 说明：因基元律动大规模封号，项目目前停更，后续更新可能会暂停。
-
 ### 1.2 核心能力
 
 | 能力 | 说明 |
