@@ -102,7 +102,7 @@ const zhCN: Record<string, string> = {
 	"Add API Key": "添加 API Key",
 	"Import API Keys (batch)": "批量导入 API Keys",
 	"No entries yet — click below to add a triple": "暂无条目 — 点击下方添加三元组",
-	"Add a triple (cookie/key/label)": "添加三元组（cookie/key/备注）",
+	"Add a triple (key/cookie/label)": "添加三元组（key/cookie/备注）",
 	"Finish import": "完成导入",
 	"Remove entry": "删除条目",
 	"Cancel import": "取消导入",

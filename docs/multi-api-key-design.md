@@ -133,7 +133,7 @@ const balanceCache = new Map<string, BalanceCacheEntry>();
 | `updateKeyAvailability(secrets, key, available)` | 异步 | 通用状态更新 |
 | `resetExhaustedKeys(secrets, resetPersisted)` | 异步 | 清空瞬态冷却；可选将所有 `available=false` 重置为 `null`（`resetPersisted=true`） |
 | `addApiKey(secrets, entry)` | 异步 | 添加单个 key（校验重复值） |
-| `addApiKeys(secrets, entries)` | 异步 | **批量添加**（三元组 value/label/cookie）；已有重复 key 更新其 cookie（不重复添加），返回 `{added, updated}` |
+| `addApiKeys(secrets, entries)` | 异步 | **批量添加**（三元组 value/cookie/label）；已有重复 key 更新其 cookie（不重复添加），返回 `{added, updated}` |
 | `updateApiKey(secrets, index, fields)` | 异步 | **三字段编辑**（value/cookie/label）；value 冲突校验，返回 `{ok, conflict?}` |
 | `removeApiKey(secrets, index)` | 异步 | 删除；调整 activeIndex 与轮询游标 |
 | `setActiveKey(secrets, index)` | 异步 | 设置 single 模式的当前 key |
@@ -289,7 +289,7 @@ pickNextApiKey(secrets, mode):
 |---|------|------|------|
 | H1 | 空列表 | 仅显示"添加 Key"动作 | ✅ |
 | H2 | 添加 key | 输入 key（可附带 label、cookie）；重复值提示已存在 | ✅ |
-| H2b | **批量导入** | 表单式逐条输入 cookie/key/备注三元组，Finish 时 `addApiKeys` 批量添加；已存在 key 自动更新 cookie 不重复添加 | ✅ |
+| H2b | **批量导入** | 表单式逐条输入 key/cookie/备注三元组，Finish 时 `addApiKeys` 批量添加；已存在 key 自动更新 cookie 不重复添加 | ✅ |
 | H2c | **编辑 key** | `editKeyFlow` 三字段（value/cookie/label）编辑，value 冲突校验 | ✅ |
 | H3 | 删除 key | 二次确认；删除 active → 调整 activeIndex；清空 → H1 | ✅ |
 | H4 | 设为当前使用 | 更新 activeIndex（**仅 single 模式渲染/显示；rotation 模式隐藏**） | ✅ |
