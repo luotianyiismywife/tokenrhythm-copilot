@@ -10,8 +10,6 @@
 
 > [!IMPORTANT]
 > **This is not affiliated with, officially maintained by, or endorsed by TokenRhythm.**
->
-> **Note: this project is currently paused because TokenRhythm has experienced large-scale account bans, so updates may stop for the time being.**
 
 Integrate [TokenRhythm](https://tokenrhythm.studio) models into GitHub Copilot Chat as a VS Code extension.
 
@@ -156,8 +154,6 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 > [!IMPORTANT]
 > **本插件与 TokenRhythm 无关，也未获得其官方维护或认可。**
->
-> **说明：因基元律动大规模封号，项目目前停更，后续更新可能会暂停。**
 
 将 [TokenRhythm](https://tokenrhythm.studio) 模型集成到 GitHub Copilot Chat 的 VS Code 插件。
 
