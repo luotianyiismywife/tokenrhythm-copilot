@@ -32,6 +32,7 @@ import {
     getBalanceDetailCached,
     getMinBalanceCny,
     formatExpiryDate,
+    getApiKeysByCookieCached,
     type BalanceDetail,
 } from "./balanceCheck";
 import { getVisionSupportedModelIds } from "./apiModelList";
@@ -63,6 +64,47 @@ function formatBalanceDetailText(detail: BalanceDetail | undefined, minBalance: 
         parts.push(`$(gift) ${l10n("Gift")} ¥${gift.toFixed(2)}${expiry ? l10nFormat(" (until {0})", expiry) : ""}`);
     }
     return parts.join(" · ");
+}
+
+/**
+ * 按 cookie 去重查询平台 API Key 列表（TTL 缓存）。
+ * 多个 key 可能共享同一 cookie，去重避免重复请求。返回 cookie → 列表 的 Map。
+ */
+async function fetchPlatformKeyListsByCookie(
+    keys: ApiKeyEntry[],
+    ttlSec: number,
+): Promise<Map<string, Awaited<ReturnType<typeof getApiKeysByCookieCached>>>> {
+    const map = new Map<string, Awaited<ReturnType<typeof getApiKeysByCookieCached>>>();
+    await Promise.all(
+        keys
+            .map((k) => k.cookie)
+            .filter((c, i, arr): c is string => !!c && arr.indexOf(c) === i)
+            .map(async (c) => {
+                map.set(c, await getApiKeysByCookieCached(c, ttlSec));
+            }),
+    );
+    return map;
+}
+
+/**
+ * 格式化平台 Key 数量文本："平台 Key：N / 10"（enabled 数量 / 上限 10）。
+ * 查询失败 → "平台 Key 数量未知"；未绑定 cookie → 空字符串。
+ */
+function formatPlatformKeysText(
+    cookie: string | undefined,
+    cookieToKeyList: Map<string, Awaited<ReturnType<typeof getApiKeysByCookieCached>>>,
+): string {
+    if (!cookie) {
+        return "";
+    }
+    const list = cookieToKeyList.get(cookie);
+    return list
+        ? l10nFormat(
+              "Platform keys: {0} / {1}",
+              String(list.filter((k) => k.status === "enabled").length),
+              "10",
+          )
+        : `$(warning) ${l10n("Platform keys unknown")}`;
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -394,6 +436,11 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                         : Promise.resolve(undefined)
                 )
             );
+            // Fetch platform API key list for cookie-bound keys (TTL-cached).
+            // Shows "平台 Key：N / 10" — the number of enabled keys under this cookie's
+            // account vs the platform limit (10). Multiple keys may share one cookie,
+            // so we dedupe by cookie value to avoid redundant requests.
+            const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
             store.keys.forEach((entry, i) => {
                 const status = getKeyDisplayStatus(entry);
                 const transient = getTransientExhaustedInfo(entry.value);
@@ -419,9 +466,13 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`
                         : "";
+                // Platform key count: "平台 Key：N / 10" (enabled keys / limit).
+                // Query failure → "平台 Key 数量未知"; no cookie → not shown.
+                const platformKeysText = formatPlatformKeysText(entry.cookie, cookieToKeyList);
                 const detailLine = [
                     `${statusIcon} ${statusText}`,
                     balanceText,
+                    platformKeysText,
                     isActive ? `$(star) ${l10n("Current")}` : "",
                     isPinned ? `$(pinned) ${l10n("Pinned")}` : "",
                     entry.cookie ? `$(key) ${l10n("Cookie bound")}` : `$(key) ${l10n("Cookie not bound")}`,
@@ -612,6 +663,8 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     : Promise.resolve(undefined)
             )
         );
+        // Platform key count (TTL-cached, deduped by cookie).
+        const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
         const picked = await vscode.window.showQuickPick(
             store.keys.map((entry, i) => {
                 const detail = entry.cookie ? balanceDetails[i] : undefined;
@@ -620,9 +673,11 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`
                         : "";
+                const platformKeysText = formatPlatformKeysText(entry.cookie, cookieToKeyList);
                 const desc = [
                     entry.cookie ? `$(key) ${maskCookie(entry.cookie)}` : undefined,
                     balanceText || undefined,
+                    platformKeysText || undefined,
                 ]
                     .filter(Boolean)
                     .join("  ·  ");
@@ -687,6 +742,8 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                         : Promise.resolve(undefined)
                 )
             );
+            // Platform key count (TTL-cached, deduped by cookie).
+            const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
 
             // List all keys with their current status
             store.keys.forEach((entry, i) => {
@@ -701,7 +758,8 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                     : entry.cookie
                         ? `$(warning) ${l10n("Balance unknown")}`
                         : "";
-                const statusLine = statusText + (balanceText ? `  ·  ${balanceText}` : "");
+                const platformKeysText = formatPlatformKeysText(entry.cookie, cookieToKeyList);
+                const statusLine = [statusText, balanceText, platformKeysText].filter(Boolean).join("  ·  ");
                 items.push({
                     label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
                     description: statusLine,

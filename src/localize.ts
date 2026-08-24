@@ -169,6 +169,9 @@ const zhCN: Record<string, string> = {
 	"Current API key is unavailable, switched to {0}": "当前 API Key 不可用，已切换到 {0}",
 	"No API keys configured": "未配置 API Key",
 	"Empty input ignored": "空输入已忽略",
+	// extension.ts - Cookie 下可用 Key 数量展示（GET /api/api-keys）
+	"Platform keys: {0} / {1}": "平台 Key：{0} / {1}",
+	"Platform keys unknown": "平台 Key 数量未知",
 };
 
 /**

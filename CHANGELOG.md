@@ -1,5 +1,17 @@
 # 更新日志（Changelog）
 
+## v1.11.0 (2026-08-24)
+
+### API Key 管理界面显示平台 Key 数量
+
+- **展示「平台 Key：N / 10」**：「管理 API Keys」的所有界面（主界面、检测二级界面、删除/设当前/编辑/绑定 Cookie 时的 key 选择界面）现在对绑定了 `tr_session` cookie 的 key 额外显示该账号下的平台 API Key 数量，与网页 `/account/keys` 页面的「可用 Key N / 10」一致。N 为 `status==="enabled"` 的 key 数量，10 为平台上限（停用/删除的 key 不占上限）。
+- **按 cookie 去重查询**：多个 key 可能共享同一个 cookie，查询时按 cookie 去重避免重复请求；查询结果带 TTL 缓存（与余额查询共享缓存周期，默认 60 秒）。查询失败显示「平台 Key 数量未知」，未绑定 cookie 不显示。
+- **新增 `GET /api/api-keys` 端点支持**：`balanceCheck.ts` 新增 `queryApiKeysByCookie` / `getApiKeysByCookieCached`，仅需 `tr_session` cookie 即可调用（与 `/api/usage-summary` 同认证，无 CSRF/反爬限制）。
+
+### 平台 API 调研文档
+
+- **记录用户中心 API 完整调研结论**：`.copilot/api-reference.md` 新增第 7 节，记录所有 `/api/*` 端点（usage-summary / auth/me / api-keys / call-logs/page）、CSRF 机制（tr_csrf cookie + x-csrf-token header + 反爬 cookie）、以及创建/删除 key 的 **TLS 指纹硬障碍**（Node.js/curl 无法通过，只有真实浏览器能通过）。
+
 ## v1.10.1 (2026-08-20)
 
 ### API Key 三元组输入顺序统一

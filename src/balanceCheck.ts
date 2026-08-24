@@ -136,6 +136,104 @@ export async function queryAccountBalance(cookie: string): Promise<number> {
     return (await queryBalanceDetail(cookie)).availableBalanceCny;
 }
 
+// ---------------------------------------------------------------------------
+// API Key 列表查询（GET /api/api-keys）
+// ---------------------------------------------------------------------------
+
+/** API Key 列表条目（GET /api/api-keys 的 data 数组元素） */
+export interface ApiKeyListItem {
+    /** Key ID（UUID） */
+    id: string;
+    /** Key 名称 */
+    name: string;
+    /** 脱敏 Key（如 sk_tr_68****7R0gHo） */
+    maskedKey: string;
+    /** Key 前缀（如 sk_tr_68Hxko） */
+    keyPrefix: string;
+    /** 状态：enabled / disabled */
+    status: string;
+    /** 最近使用时间（ISO 8601 UTC），可能为 null */
+    lastUsedAt: string | null;
+    /** 创建时间（ISO 8601 UTC） */
+    createdAt: string;
+}
+
+const API_KEYS_URL = "https://tokenrhythm.studio/api/api-keys";
+
+/**
+ * 查询 cookie 对应账号下的全部 API Key 列表（GET /api/api-keys）。
+ *
+ * 实测（2026-08-24）：仅需 `tr_session` cookie 即可调用（与 usage-summary 同认证，
+ * 无 CSRF/反爬限制）。返回 data 为 key 数组，含 id/name/maskedKey/keyPrefix/
+ * status/lastUsedAt/createdAt。
+ *
+ * @throws 网络错误 / 非 2xx / code!==0 / 401（cookie 失效）
+ */
+export async function queryApiKeysByCookie(cookie: string): Promise<ApiKeyListItem[]> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        const response = await fetch(API_KEYS_URL, {
+            headers: {
+                Cookie: `tr_session=${cookie}`,
+                Accept: "application/json",
+            },
+            signal: controller.signal,
+        });
+        if (response.status === 401) {
+            throw new Error("401 未认证：tr_session Cookie 失效或格式错误");
+        }
+        if (!response.ok) {
+            throw new Error(`API Key 列表查询失败：[${response.status}] ${response.statusText}`);
+        }
+        const body = (await response.json()) as {
+            code: number;
+            message?: string;
+            data?: ApiKeyListItem[];
+        };
+        if (body.code !== 0 || !Array.isArray(body.data)) {
+            throw new Error(`API Key 列表查询返回错误：code=${body.code} message=${body.message ?? ""}`);
+        }
+        return body.data;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
+ * 带 TTL 缓存的 API Key 列表查询（按 cookie 粒度）。
+ * @returns key 列表；查询失败返回 undefined（不抛错）
+ */
+export async function getApiKeysByCookieCached(
+    cookie: string,
+    ttlSec: number,
+): Promise<ApiKeyListItem[] | undefined> {
+    if (ttlSec > 0) {
+        const cached = apiKeyListCache.get(cookie);
+        if (cached && Date.now() - cached.checkedAt < ttlSec * 1000) {
+            return cached.list;
+        }
+    }
+    try {
+        const list = await queryApiKeysByCookie(cookie);
+        apiKeyListCache.set(cookie, { list, checkedAt: Date.now() });
+        return list;
+    } catch (err) {
+        logger.warn("key.apiKeysList", {
+            cookie: maskCookieForLog(cookie),
+            error: err instanceof Error ? err.message : String(err),
+        });
+        return undefined;
+    }
+}
+
+/** API Key 列表 TTL 缓存（按 cookie 粒度） */
+interface ApiKeyListCacheEntry {
+    list: ApiKeyListItem[];
+    checkedAt: number;
+}
+const apiKeyListCache = new Map<string, ApiKeyListCacheEntry>();
+
 /**
  * 带 TTL 缓存的余额详情查询（按 cookie 粒度）。
  * @returns 余额详情；查询失败返回 undefined（不抛错，调用方回退被动检测）

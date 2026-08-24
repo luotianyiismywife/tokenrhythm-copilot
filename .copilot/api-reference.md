@@ -79,3 +79,74 @@ https://tokenrhythm.studio/v1
 | Responses `tool_choice` | 仅接受 `auto` / `none`（思考模式下拒绝 `required`/对象形式） |
 | Anthropic 协议非全量 | `qwen3.7-max`、`kimi-k2.7-code` 不支持（`supports_anthropic=false`），以 `/v1/models` 动态标记为准 |
 | qwen3.8-max 图片限制 | 图片尺寸必须 >= 10x10 像素 |
+
+---
+
+## 7. 用户中心 API（cookie 认证，`/api/*`）
+
+> 与 `/v1/*`（Bearer API Key）是两套体系。用户中心 `/api/*` 用 `tr_session` cookie 认证，
+> 用于查询账号信息、余额、调用日志、API Key 管理等。基础地址 `https://tokenrhythm.studio`（无 `/v1`）。
+
+### 7.1 已确认端点
+
+| 端点 | 方法 | 认证 | 用途 | CSRF |
+|------|------|------|------|------|
+| `/api/usage-summary` | GET | tr_session | 余额 + 用量汇总（`balanceCny`/`availableBalanceCny`/`expiringBalanceCny`/`nextExpiryAt`） | 无 |
+| `/api/auth/me` | GET | tr_session | 当前账号信息（id/name/phoneMasked/status/role）；**响应会 Set-Cookie 下发 `tr_csrf`** | 无 |
+| `/api/api-keys` | GET | tr_session | API Key 列表（`data` 数组，含 `id`/`name`/`maskedKey`/`keyPrefix`/`status`/`lastUsedAt`/`createdAt`） | 无 |
+| `/api/api-keys` | POST | tr_session + CSRF | 创建 API Key，body `{"name":"..."}`，返回含完整 `key`（仅此次展示） | **有** |
+| `/api/api-keys/{id}/delete` | POST | tr_session + CSRF | 删除指定 API Key（注意是 POST 不是 DELETE） | **有** |
+| `/api/call-logs/page` | GET | tr_session | 调用日志分页（`startAt`/`endAt`/`page`/`pageSize`） | 无 |
+
+### 7.2 API Key 列表返回结构（GET /api/api-keys）
+
+```jsonc
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "id": "043ea3b0-7037-4251-922c-bae7b9bde8cc",
+      "name": "默认 API Key",
+      "maskedKey": "sk_tr_68****7R0gHo",
+      "keyPrefix": "sk_tr_68Hxko",
+      "status": "enabled",          // enabled / disabled
+      "lastUsedAt": "2026-08-24T02:46:49.699Z",  // 可能为 null
+      "createdAt": "2026-08-22T22:56:21.714Z"
+    }
+  ],
+  "traceId": "trace_..."
+}
+```
+
+> **可用 Key 数量**：`data.filter(k => k.status === "enabled").length`。平台上限 10 个（停用/删除的不占上限），网页显示为 "可用 Key N / 10"。
+
+### 7.3 CSRF 机制（创建/删除 key）
+
+创建/删除 API Key 受 CSRF 保护，需三重校验：
+
+1. **`tr_session` cookie**（认证）
+2. **`tr_csrf` cookie + `x-csrf-token` header**（值相同；`tr_csrf` 可通过 `GET /api/auth/me` 响应的 Set-Cookie 获取）
+3. **反爬 cookie**：`_c_WBKFRo` + `tr_ref_device` + `_nb_ioWEgULi`（网页加载时服务端/JS 下发）
+
+### 7.4 ⚠️ 创建/删除 key 的 TLS 指纹硬障碍（2026-08-24 实测）
+
+**结论：Node.js / curl 无法创建/删除 key，只有真实浏览器环境能通过。**
+
+实测（2026-08-24，cookie + headers 完全相同）：
+
+| 调用方式 | 结果 |
+|----------|------|
+| 浏览器页面内 `fetch`（`credentials: "include"` + `x-csrf-token` header） | ✅ 200 成功创建/删除 |
+| Node.js `fetch`（带完全相同 cookie + headers + sec-ch-ua） | ❌ 403 CSRF_INVALID |
+| curl（带完全相同 cookie + headers + sec-ch-ua） | ❌ 403 CSRF_INVALID |
+
+`_c_WBKFRo` 在同一浏览器内是固定值（刷新 3 次不变），但 Node.js/curl 带上它仍被拒。
+说明服务端用了 **TLS 指纹校验（JA3/JA4）**——只有真实浏览器的 TLS 握手能通过，
+Node.js（undici）和 curl 的 TLS 指纹被识别并拒绝。
+
+**影响**：VS Code 扩展运行在 Node.js 环境，**无法绕过 TLS 指纹校验**，
+因此纯 API 方式创建/删除 key 不可行。查询（GET）不受影响，稳定可用。
+
+> 若未来需实现创建/删除，只能用 `vscode.window.createWebviewPanel` 内嵌
+> `/account/keys` 页面让用户在真实浏览器环境操作，非纯 API 调用。
