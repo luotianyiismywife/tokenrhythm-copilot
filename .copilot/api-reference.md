@@ -3,9 +3,10 @@
 > ⚠️ **遇到 TokenRhythm API 集成问题（参数 400、协议不兼容、能力标记等）时，优先查看本文档和官方 API 文档**：
 > - 官方 API 文档：<https://tokenrhythm.studio/docs/api-integration>
 > - 调试时以官网示例（cURL/Node.js）为基准，对比插件请求体差异。
+> - **Responses API（`/v1/responses`）问题分析见根目录 [`RESPONSES_API_ISSUES.md`](../RESPONSES_API_ISSUES.md)**（工具格式扁平化、拒绝 function_call 块、tool_choice 受限等）。
 >
 > 本文档记录 TokenRhythm 平台的 API 地址信息，供扩展开发与调试参考。
-> 最后更新：2026-08-06
+> 最后更新：2026-08-25
 
 ---
 
