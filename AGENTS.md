@@ -49,7 +49,7 @@
 | **请求延迟** | 可配置的请求间隔延迟，避免触发 API 限流 |
 | **超时控制** | 可配置的请求超时时间（默认 10 分钟） |
 | **立即取消** | 取消请求时通过 `reader.cancel()` 立即中断流式读取，停止后台接收 |
-| **视觉代理配置** | 支持通过设置 `tokenrhythm.visionProxyModel`、`tokenrhythm.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`tokenrhythm.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="disabled"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉代理模型动态选择**：`tokenrhythm.setVisionProxyModel` 命令从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表（实测含 kimi-k2.5/k2.6/k2.7-code、qwen3.8-max、seed-2.1-turbo/pro），QuickPick 选择代替手填；API 不可用时回退手填 |
+| **视觉代理配置** | 支持通过设置 `tokenrhythm.visionProxyModel`、`tokenrhythm.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`tokenrhythm.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="disabled"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉模型仅从本供应商（tokenrhythm）查找**（`findVisionModel` 多级回退匹配裸 ID/完整 ID，修复 issue #3——`selectChatModels` 裸 ID 精确匹配带 vendor 前缀的完整 identifier 会落空）。**视觉代理模型动态选择**：`tokenrhythm.setVisionProxyModel` 命令从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表（实测含 kimi-k2.5/k2.6/k2.7-code、qwen3.8-max、seed-2.1-turbo/pro），QuickPick 选择代替手填；API 不可用时回退手填 |
 | **安装欢迎页 (Walkthrough)** | 首次安装且未配置 API Key 时自动打开引导向导，指引用户设置 API Key 和打开语言模型管理器。包含 3 个步骤：设置 API Key、显示模型、高级设置。通过 `onStartupFinished` 激活事件确保在 VS Code 启动后立即检测 |
 
 ### 1.3 模型清单
@@ -543,7 +543,7 @@ test/
 | `vision/types.ts` | ~53 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
 | `vision/historyCodec.ts` | ~150 | 跨轮视觉历史编解码（源自上游 opencode-go-copilot v1.9.2）：`VISION_TOOL_HISTORY_MIME`、`VisionToolHistoryEntry`、`serializeVisionToolHistory`、`deserializeVisionToolHistory`、`toOpenAIVisionToolMessages`、`toAnthropicVisionToolMessages` |
 | `vision/historyPart.ts` | ~28 | 跨轮视觉历史 DataPart 创建/解析（源自上游）：`createVisionToolHistoryPart`、`parseVisionToolHistoryPart` |
-| `vision/imageProxy.ts` | ~95 | 图片代理核心：调用视觉模型描述图片（`callVisionModel`/`callVisionModelMulti`），支持 thinking 模式配置和文本流式转发 |
+| `vision/imageProxy.ts` | ~130 | 图片代理核心：调用视觉模型描述图片（`callVisionModel`/`callVisionModelMulti`），**仅在本供应商（tokenrhythm）内查找视觉模型**（`findVisionModel` 多级回退，修复 issue #3），支持 thinking 模式配置和文本流式转发 |
 
 ---
 
@@ -1123,8 +1123,14 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ### 4.24 `src/vision/imageProxy.ts`
 
+#### `const PROVIDER_VENDOR`
+`"tokenrhythm"` — 本扩展注册语言模型的 vendor（`extension.ts` 中 `registerLanguageModelChatProvider("tokenrhythm", ...)`）。视觉代理**仅从本供应商**查找视觉模型，绝不跨供应商匹配同名模型（避免把图片请求路由到其他平台的同名模型，需不同授权/计费）。
+
+#### `async function findVisionModel(visionModelId): Promise<vscode.LanguageModelChat | undefined>`
+在当前供应商（`tokenrhythm`）内按裸模型 ID（如 `kimi-k2.6`）查找视觉模型。**修复 issue #3（2026-08-25）**：`tokenrhythm.visionProxyModel` 存裸 ID，而 VS Code 的 `LanguageModelChat.id` 是带 vendor 前缀的完整 identifier（`tokenrhythm/kimi-k2.6`），裸 `selectChatModels({ id })` 精确匹配 `metadata.id`（裸 ID）理应命中——但多 provider 环境下与 `chat.cachedLanguageModels.v2` 展示的完整 identifier 混淆导致匹配失败；本函数多级回退确保命中：① `selectChatModels({ vendor: "tokenrhythm", id: bareId })`（vendor + 裸 ID 精确匹配）；② 扫描本供应商全部模型按完整 ID / 裸 ID 后缀 / 名称匹配。配置值同时支持裸 ID 与完整 ID（`tokenrhythm/kimi-k2.6`，自动剥去 vendor 前缀）。
+
 #### `callVisionModel(imageData, mimeType, visionModelId, query, token, progress?): Promise<string>`
-调用视觉模型回答关于图片的查询。使用 `vscode.lm.selectChatModels()` 查找模型，发送图片+查询文本，收集流式回答返回，并可通过 `progress` 实时转发 `LanguageModelTextPart`。与旧版 `describe_image` 不同，`query` 参数来自模型的 `ask_image` 工具调用，允许针对性提问（如"按钮是什么颜色？"）。支持 thinking 模式配置，通过 `tokenrhythm.visionProxyThinking` 设置控制，开启时发送 `reasoning_effort="high"`，关闭时发送 `reasoning_effort="disabled"`。
+调用视觉模型回答关于图片的查询。使用 `findVisionModel`（本供应商内按裸 ID/完整 ID 多级回退查找）定位模型，发送图片+查询文本，收集流式回答返回，并可通过 `progress` 实时转发 `LanguageModelTextPart`。与旧版 `describe_image` 不同，`query` 参数来自模型的 `ask_image` 工具调用，允许针对性提问（如"按钮是什么颜色？"）。支持 thinking 模式配置，通过 `tokenrhythm.visionProxyThinking` 设置控制，开启时发送 `reasoning_effort="high"`，关闭时发送 `reasoning_effort="disabled"`。
 
 #### `callVisionModelMulti(images, visionModelId, query, token, progress?): Promise<string>`
 多图版本的视觉模型调用。将多张图片的 `LanguageModelDataPart` 和 query 文本放在同一条消息中发送给视觉模型，使其可以同时看到所有图片进行比较分析。支持流式输出转发。

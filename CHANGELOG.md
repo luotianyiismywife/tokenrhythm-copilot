@@ -1,5 +1,12 @@
 # 更新日志（Changelog）
 
+## v1.11.1 (2026-08-25)
+
+### 修复 ask_image 视觉代理失效（issue #3）
+
+- **视觉模型查找改用多级回退**：`tokenrhythm.visionProxyModel` 配置的是裸模型 ID（如 `kimi-k2.6`），而 VS Code 中 `LanguageModelChat.id` 是带 vendor 前缀的完整 identifier（`tokenrhythm/kimi-k2.6`），裸 ID 精确匹配 `selectChatModels({ id })` 会落空，导致视觉代理抛 "Vision model not found"、返回 `[Image query unavailable]`。现改为 `findVisionModel` 多级回退：① `selectChatModels({ vendor: "tokenrhythm", id: bareId })`（vendor + 裸 ID 精确匹配）；② 扫描本供应商全部模型按完整 ID / 裸 ID 后缀 / 名称匹配。配置值同时支持裸 ID 与完整 ID（自动剥去 vendor 前缀）。
+- **仅在本供应商内查找**：视觉代理始终使用本插件（tokenrhythm）注册的视觉模型——与对话文本模型同供应商，绝不回退到其他供应商的同名模型（避免把图片请求路由到其他平台，需不同授权/计费）。
+
 ## v1.11.0 (2026-08-24)
 
 ### API Key 管理界面显示平台 Key 数量
