@@ -473,7 +473,14 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
                 break;
             }
             case "response.completed": {
-                // Usage arrives on the completed event
+                // Usage arrives on the completed event. Also capture the response
+                // status — "incomplete" (with incomplete_details.reason =
+                // "max_output_tokens") marks budget exhaustion with no answer text.
+                const status = event.response?.status;
+                if (status === "incomplete") {
+                    const reason = (event.response as { incomplete_details?: { reason?: string } })?.incomplete_details?.reason;
+                    this._lastFinishReason = reason ?? "max_tokens";
+                }
                 const usage = event.response?.usage as
                     | { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number }; output_tokens_details?: { reasoning_tokens?: number } }
                     | undefined;

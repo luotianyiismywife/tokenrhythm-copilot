@@ -77,6 +77,21 @@ export async function getApiModelIds(apiKey: string | undefined): Promise<Set<st
 }
 
 /**
+ * Get the full metadata list (context_length, max_completion_tokens and the
+ * supports_* capability flags) from the cached /v1/models response.
+ * Returns an empty list on failure (silent degradation).
+ *
+ * Used by model discovery as the PRIMARY spec source for auto-discovered
+ * models — the platform's own metadata is more accurate and fresher than
+ * models.dev, whose catalog may lag or lack TokenRhythm-specific entries
+ * (fetch failures previously degraded specs to 128K context / 4096 output).
+ */
+export async function getApiModelMetadataList(apiKey: string | undefined): Promise<ApiModelMetadata[]> {
+    await ensureApiModelCache(apiKey);
+    return cachedModelMetadata ?? [];
+}
+
+/**
  * Get the set of model IDs whose /v1/models entry reports supports_responses=true.
  * These models can use the Responses API protocol (POST /v1/responses).
  *

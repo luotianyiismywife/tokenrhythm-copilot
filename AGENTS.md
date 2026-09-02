@@ -28,8 +28,8 @@
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `tokenrhythm` 厂商 |
 | **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `tokenrhythm.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；不可用时按 `tokenrhythm.singleKeyFallback` 设置报错或自动切换并弹窗提示）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`tokenrhythm.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/cookie/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除 cookie 的 key 选择界面）均显示每个 key 的两种余额 + 赠送余额有效期**（绑定 cookie 时经 `getBalanceDetailCached` TTL 缓存查询 `/api/usage-summary`：充值余额 `availableBalanceCny - expiringBalanceCny` 显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error 即轮询会被跳过），赠送余额 `expiringBalanceCny` 显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 有效期，`nextExpiryAt` 本地时区格式化），查询失败显示 `$(warning) 余额未知`，未绑定 cookie 不显示余额）。**平台 Key 数量展示（2026-08-24）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均对绑定 cookie 的 key 经 `getApiKeysByCookieCached`（TTL 缓存，按 cookie 去重查询，避免多个 key 共享同一 cookie 时重复请求）查询 `GET /api/api-keys`，展示 `平台 Key：N / 10`（`status==="enabled"` 的 key 数量 / 平台上限 10，停用/删除的 key 不占上限）；查询失败显示 `$(warning) 平台 Key 数量未知`，未绑定 cookie 不显示。格式化逻辑集中在 `formatPlatformKeysText`（模块级函数），查询逻辑集中在 `fetchPlatformKeyListsByCookie`（按 cookie 去重）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/503，状态码可配置 `tokenrhythm.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `tokenrhythm.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error` 但用户把 500 加入重试列表）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `tokenrhythm.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
-| **多模型支持** | 内置 14 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
-| **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型从 `models.dev` 数据库获取元数据（上下文长度、视觉能力、工具调用、推理能力等）并自动添加，`thinkingMode` 从 `reasoning` 字段推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `tokenrhythm.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
+| **多模型支持** | 内置 16 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
+| **自动模型发现** | 通过 `tokenrhythm.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型元数据以 **`/v1/models` 完整元数据为主源**（`context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools`），models.dev 仅提供友好名称与回退规格——**models.dev 未收录或拉取失败时不再降级为 128K 上下文 / 4096 输出兜底**（2026-09-03 修复：曾导致 glm-5.3-flash 等自动发现模型上下文显示缩水为 102K、4096 输出上限被推理耗尽后正文为空，Copilot Chat 报 "Sorry, no response was returned."）；两源均未知输出上限时不发送 `max_completion_tokens`（交由服务端默认值）。`thinkingMode` 从 `supports_reasoning` 推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `tokenrhythm.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `tokenrhythm.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「TokenRhythm」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
 | **三协议 API 模式** | 同时支持 **OpenAI 兼容格式** (`/chat/completions`)、**Anthropic 格式** (`/v1/messages`) 和 **Responses API 格式** (`/v1/responses`)。可通过设置 `tokenrhythm.apiMode`（默认 `auto`）手动切换：`auto` 跟随各模型默认格式，`openai` 强制 OpenAI 格式，`anthropic` 强制 Anthropic 格式，`responses` 强制 Responses 格式。开关对聊天请求和 Git 提交消息生成均生效。启动时自动读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 字段并**缓存动态标记**（不硬编码模型 ID，未来新支持协议的模型自动生效）。**auto 模式优先级**：`enableResponsesApi`（默认关闭）→ `enableAnthropicApi`（默认关闭）→ 兜底 OpenAI。默认关闭原因：① TokenRhythm 的 Responses 端点仍在演进（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规）；② **Anthropic 格式对部分模型存在兼容性 bug**（如 DeepSeek 系列强制思考 + temperature/top_p → 400"请求参数组合无效"，2026-08-06 实测，插件已修复仅强制思考时跳过温度）。**建议默认使用更成熟的 OpenAI 兼容格式** |
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
@@ -60,7 +60,7 @@
 
 | 系列 | 模型 ID | 视觉 | 推理强度选择器 | API 格式 |
 |------|---------|------|----------------|----------|
-| GLM | `glm-5.2`, `glm-5.1`, `glm-5` | ❌ | `禁用思考` / `高` / `最大` (5.2)² / `思考`（5.1/5 不支持思考切换） | OpenAI |
+| GLM | `glm-5.3`, `glm-5.3-flash`⁷, `glm-5.2`, `glm-5.1`, `glm-5` | ❌/✅⁷ | `禁用思考` / `高` / `最大` (5.2/5.3 系列) / `思考`（5.1/5 不支持思考切换） | OpenAI |
 | Kimi | `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`¹ | ✅ | `思考`（不支持思考切换） | OpenAI |
 | DeepSeek | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`³ | ❌ | `禁用思考` / `高` / `极高` | OpenAI / Responses⁵ |
 | MiMo | `mimo-v2.5-pro` | ❌ | `禁用思考` / `思考` | OpenAI |
@@ -73,6 +73,8 @@
 > ⁴ `qwen3.7-max` 仅支持 OpenAI/Responses 协议（supports_anthropic=false）。
 > ⁵ Responses 能力**动态探测**：启动时读取 `/v1/models` 的 `supports_responses` 标记，不硬编码模型 ID——未来任何模型获得 Responses 支持都会自动生效。协议**默认关闭**（`enableResponsesApi=false`），默认使用 OpenAI 兼容格式。
 > ⁶ `qwen3.8-max`（测试中）支持文本与图像输入（视觉 ✅），1M 上下文 / 131.1K 输出，原生支持 Responses API。
+
+> ⁷ `glm-5.3-flash`（2026-09-03 内置化）支持文本与图像输入（视觉 ✅），1M 上下文 / 131K 输出，支持思考切换；`glm-5.3` 为纯文本版本，规格相同。
 
 > 模型清单来源于 [TokenRhythm 模型页](https://tokenrhythm.studio/models)。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不适用于 Chat，已排除。
 
@@ -110,6 +112,8 @@
 │  │      └─ apiMode="responses"  → ResponsesApi                 │  │
 │  │   6. 发送 HTTP 请求 (fetch with undici + 超时控制)             │  │
 │  │   7. 流式解析响应 → Progress<LanguageModelResponsePart2>      │  │
+│  │   7b. 零正文预算耗尽检测（finish_reason=length/max_tokens      │  │
+│  │       且正文为空 → 抛友好错误，不再静默返回空流）             │  │
 │  │      ├─ LanguageModelTextPart     (文本)                      │  │
 │  │      ├─ LanguageModelThinkingPart (推理过程)                  │  │
 │  │      └─ LanguageModelToolCallPart (工具调用)                  │  │
@@ -508,7 +512,7 @@ test/
 | `provider.ts` | ~1290 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由、多 key 轮换循环、余额预检、被动切换）及图片代理多轮循环处理 |
 | `keyManager.ts` | ~500 | 多 API Key 管理：SecretStorage 存取与旧 key 迁移、sticky/rotation/single 选择逻辑、可用性状态（持久化 available + 瞬态冷却）、轮换错误判定、脱敏、批量添加（addApiKeys）、三字段编辑（updateApiKey） |
 | `balanceCheck.ts` | ~260 | 余额查询：cookie 认证 `GET /api/usage-summary`、TTL 缓存、`checkKeyBalance` 预检（返回余额值供日志/UI 展示）、`isKeyBalanceSufficient` 快捷判断、`testKeyAvailability` 手动检测（查余额 + 最小聊天请求）；**平台 Key 列表查询**：`GET /api/api-keys`（仅需 tr_session，无 CSRF）、`queryApiKeysByCookie`/`getApiKeysByCookieCached`（TTL 缓存，返回含 id/name/maskedKey/status 等的完整列表，供 UI 展示 "平台 Key：N / 10"） |
-| `models.ts` | ~230 | 14 个内置模型定义，模型配置查询（所有模型声明 `imageInput: true`） |
+| `models.ts` | ~240 | 16 个内置模型定义（含 glm-5.3/glm-5.3-flash，2026-09-03），模型配置查询（所有模型声明 `imageInput: true`） |
 | `types.ts` | ~95 | `TokenRhythmModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
 | `apiModelList.ts` | ~120 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
 | `modelsDev.ts` | ~130 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
@@ -623,6 +627,9 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 #### `export async function tryTransientRetryRound(secrets, retryCount, maxRetries): Promise<boolean>`
 瞬态失败（429/503）整轮自动重试辅助。达到上限返回 false；否则**清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，不触碰持久化 unavailable——冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效）、指数退避等待（2s/4s/8s，上限 8s）后返回 true。供 provider 与 gitCommit 的轮换循环在"全部 key 均因 429/503 失败"时调用，次数由 `tokenrhythm.transientRetryTimes` 配置（默认 3，0 禁用）。
 
+#### `checkZeroAnswerBudgetExhausted(api, collectedOutputText, modelId): void`（模块级函数）
+零正文预算耗尽检测（2026-09-03 新增）：流式处理结束后，若结束原因为 `length`/`max_tokens` 且累计正文为空（`collectedOutputText` 拼接后为空或全空白），抛出友好错误（l10n 中文文案"模型将全部输出 token 预算耗在了思考上……请降低推理强度或关闭思考后重试"）并记录 `request.zeroAnswer` 错误日志——避免思考模型把 max_tokens 预算全部耗在推理后静默返回空流，Copilot Chat 只显示 "Sorry, no response was returned." 无任何提示。由 `_executeApiRequest` 在三个协议分支（openai/anthropic/responses）的 `processStreamingResponse` 之后调用。
+
 ---
 
 ### 4.3 `src/models.ts`
@@ -646,7 +653,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 | `apiMode` | `"openai" \| "anthropic" \| "responses"` (可选) | API 格式模式 |
 
 #### `const BUILT_IN_MODELS: BuiltInModelDef[]`
-14 个内置模型定义常量数组（来源：[TokenRhythm 模型页](https://tokenrhythm.studio/models)）。
+16 个内置模型定义常量数组（来源：[TokenRhythm 模型页](https://tokenrhythm.studio/models)；glm-5.3/glm-5.3-flash 于 2026-09-03 经 `/v1/models` 实测确认后内置化）。
 
 #### `getBuiltInModelInfos(): LanguageModelChatInformation[]`
 将内置模型定义转换为 VS Code 的模型信息列表。每个模型注册**一个条目**，带 `isUserSelectable: true` 确保在模型选择器中可见（VS Code 1.120+ 要求），并通过 `configurationSchema` 附加推理强度选择器（中文标签）。switchable 模型显示 `禁用思考/思考` 或 `禁用思考/高/最大`（可关闭推理）；adaptive 模型仅显示 `禁用思考/自动`；always 模型不显示 `禁用思考` 选项，仅在支持推理强度时显示强度选项。`maxInputTokens` 按真实上下文窗口的**可配置比例**声明（`getMaxInputTokensRatio()` 读取 `tokenrhythm.maxInputTokensRatio` 设置，默认 `1.0`，建议 `0.8`，`Math.floor` 取整，范围 0.1–1.0），使 VS Code 的 agent 自动压缩（约 90% 阈值）能在真实上下文的约 72%（比例 0.8 时）处触发；`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
@@ -731,6 +738,7 @@ API 实现的抽象基类。
 | `_hasEmittedText` | `boolean` | 是否已发射过文本 |
 | `_hasEmittedThinking` | `boolean` | 是否已发射过推理内容 |
 | `_emittedBeginToolCallsHint` | `boolean` | 是否已发射工具调用前导空格 |
+| `_lastFinishReason` | `string \| undefined` | 最近一次流的结束原因（`length`/`max_tokens`/`stop`/`tool_calls` 等），供 `checkZeroAnswerBudgetExhausted` 零正文预算耗尽检测使用；经 `lastFinishReason` 公共 getter 暴露 |
 | `_xmlThinkActive` | `boolean` | XML think 块解析中 |
 | `_xmlThinkDetectionAttempted` | `boolean` | 是否尝试过 XML think 检测 |
 | `_currentThinkingId` | `string \| null` | 当前推理内容 ID |
@@ -974,6 +982,9 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 #### `getVisionSupportedModelIds(apiKey): Promise<Set<string>>`
 从缓存的 `/v1/models` 元数据中筛选 `supports_vision=true` 的模型 ID 集。供 `extension.ts` 的 `tokenrhythm.setVisionProxyModel` 命令动态加载视觉模型列表（QuickPick 选择代替手填）。
 
+#### `getApiModelMetadataList(apiKey): Promise<ApiModelMetadata[]>`（2026-09-03 新增）
+返回缓存的 `/v1/models` **完整元数据列表**（含 `context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools` 等字段）。供 `provideModel.ts` 自动发现流程作为新模型规格的**主数据源**——平台自己的元数据比 models.dev 更准更新（models.dev 目录可能滞后或未收录 TokenRhythm 条目，拉取失败时曾把自动发现模型规格降级到 128K/4096 兜底）。查询失败返回空列表（静默降级）。
+
 #### `isApiFetchSuccessful(): boolean`
 返回最近一次 API 模型列表拉取是否成功。用于模型提供者决定是否应用 API 过滤。
 
@@ -1021,7 +1032,7 @@ single 模式当前 key 不可用时的行为：报错 / 自动切换并弹窗�
 同步返回当前探测到的 supports_anthropic=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Anthropic 协议。
 
 #### `getAutoDiscoveredModelConfig(modelId): TokenRhythmModelItem | undefined`
-返回之前自动发现的模型配置。由 `provider.ts` 在 `getBuiltInModelConfig()` 返回 undefined 时作为回退调用。
+返回之前自动发现的模型配置（**返回浅拷贝**——provider.ts 每次请求会就地修改返回对象（enable_thinking、temperature、reasoning_effort 等），不拷贝会把上一次请求的修改泄漏到后续请求）。由 `provider.ts` 在 `getBuiltInModelConfig()` 返回 undefined 时作为回退调用。两源均未知输出上限时 `max_completion_tokens` 字段**不设置**（请求体不发送输出上限，交由服务端默认值）。
 
 ---
 

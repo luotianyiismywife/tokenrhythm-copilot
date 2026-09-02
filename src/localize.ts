@@ -38,6 +38,10 @@ const zhCN: Record<string, string> = {
 	"The connection was closed by the server. The generation took too long. Please try again or request shorter content.":
 		"服务端连接被关闭，生成内容过长时间过长。请重试或请求较短的内容。",
 
+	// zero-answer budget exhaustion
+	"The model used all available output tokens on reasoning ({0}, finish reason: {1}) and produced no answer. Lower the reasoning effort, or turn thinking off and retry.":
+		"模型（{0}）将全部输出 token 预算耗在了思考上（结束原因：{1}），没有生成任何回答。请降低推理强度或关闭思考后重试。",
+
 	// reasoning effort labels (keys are English fallback text)
 	"Disabled": "禁用思考",
 	"Adaptive": "自动",

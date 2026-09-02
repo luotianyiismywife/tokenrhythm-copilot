@@ -523,7 +523,12 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		}
 
 		if (chunk.type === "message_delta" && chunk.delta) {
-			// Extract stop_reason and usage information
+			// Capture the stop reason for budget-exhaustion detection ("max_tokens")
+			const stopReason = (chunk.delta as { stop_reason?: string }).stop_reason;
+			if (stopReason) {
+				this._lastFinishReason = stopReason;
+			}
+			// Extract usage information
 			const chunkUsage = chunk.usage as { output_tokens?: number } | undefined;
 			if (chunkUsage?.output_tokens && this._anthropicInputTokens > 0) {
 				this._onUsage?.({

@@ -90,6 +90,10 @@ const BUILT_IN_MODELS: BuiltInModelDef[] = [
     { baseId: "glm-5.2", displayName: "GLM-5.2", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "high", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 131072 },
     { baseId: "glm-5.1", displayName: "GLM-5.1", vision: false, thinkingMode: "always", contextLength: 200000, maxTokens: 131072 },
     { baseId: "glm-5", displayName: "GLM-5", vision: false, thinkingMode: "always", contextLength: 1000000, maxTokens: 131072 },
+    // GLM-5.3 / GLM-5.3-Flash: 1M context / 128K output, thinking supported;
+    // GLM-5.3-Flash also supports vision input (2026-09-03 /v1/models confirmed)
+    { baseId: "glm-5.3", displayName: "GLM-5.3", vision: false, thinkingMode: "switchable", contextLength: 1048576, maxTokens: 131072 },
+    { baseId: "glm-5.3-flash", displayName: "GLM-5.3 Flash", vision: true, thinkingMode: "switchable", contextLength: 1048576, maxTokens: 131072 },
 
     // ── Kimi series ── 256K context, text + image input
     { baseId: "kimi-k2.7-code", displayName: "Kimi K2.7 Code", vision: true, thinkingMode: "always", supportsTemperature: false, contextLength: 262144, maxTokens: 131072 },

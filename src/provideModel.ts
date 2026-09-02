@@ -3,7 +3,7 @@ import { CancellationToken, LanguageModelChatInformation, PrepareLanguageModelCh
 
 import { logger } from "./logger";
 import { getBuiltInModelInfos, getMaxInputTokensRatio } from "./models";
-import { getApiModelIds, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful } from "./apiModelList";
+import { getApiModelIds, getApiModelMetadataList, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful, type ApiModelMetadata } from "./apiModelList";
 import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
 import { getPrimaryApiKey } from "./keyManager";
 import type { TokenRhythmModelItem } from "./types";
@@ -56,22 +56,29 @@ export function getAnthropicModelIds(): Set<string> {
  */
 function buildAutoDiscoveredInfo(
     modelId: string,
+    apiMeta: ApiModelMetadata | undefined,
     entry: ModelsDevEntry | undefined
 ): LanguageModelChatInformation | undefined {
-    // Determine display name
+    // Determine display name (models.dev carries friendly names; /v1/models does not)
     const displayName = entry?.name ?? modelId;
 
-    // Determine context length and max tokens
-    const contextLength = entry?.limit?.context ?? DEFAULT_CONTEXT_LENGTH;
-    const maxOutputTokens = entry?.limit?.output ?? DEFAULT_MAX_TOKENS;
+    // Determine context length and max output tokens.
+    // /v1/models metadata is the PRIMARY source (platform truth); models.dev is
+    // the fallback when the API entry lacks the fields. The hardcoded defaults
+    // are a last resort — a wrong 4096 output cap let reasoning models burn the
+    // whole budget in thinking before writing any answer text, which surfaced
+    // in Copilot Chat as "Sorry, no response was returned.".
+    const contextLength = apiMeta?.context_length ?? entry?.limit?.context ?? DEFAULT_CONTEXT_LENGTH;
+    const maxOutputTokens = apiMeta?.max_completion_tokens ?? entry?.limit?.output ?? DEFAULT_MAX_TOKENS;
 
     // Determine tool calling support
-    const toolCalling = entry?.tool_call ?? true;
+    const toolCalling = apiMeta?.supports_tools ?? (entry?.tool_call ?? true);
 
-    // Determine thinking mode from models.dev reasoning field
+    // Determine thinking mode: /v1/models supports_reasoning is primary,
+    // models.dev reasoning is the fallback.
     // reasoning=true → model supports thinking → show toggle (switchable)
     // reasoning=false/undefined → no thinking capability → always (no toggle)
-    const hasReasoning = entry?.reasoning === true;
+    const hasReasoning = apiMeta?.supports_reasoning ?? (entry?.reasoning === true);
     let enumValues: string[];
     let enumItemLabels: string[];
     let enumDescriptions: string[];
@@ -132,13 +139,22 @@ function buildAutoDiscoveredInfo(
  */
 function storeAutoDiscoveredConfig(
     modelId: string,
+    apiMeta: ApiModelMetadata | undefined,
     entry: ModelsDevEntry | undefined,
     apiMode: string = "openai"
 ): TokenRhythmModelItem {
     const modalities = entry?.modalities?.input ?? [];
     const hasImage = modalities.includes("image") || modalities.includes("video");
-    const vision = entry?.attachment === true || hasImage;
-    const hasReasoning = entry?.reasoning === true;
+    // /v1/models supports_vision is the primary source (platform truth);
+    // models.dev attachment/modalities is the fallback.
+    const vision = apiMeta?.supports_vision ?? (entry?.attachment === true || hasImage);
+    const hasReasoning = apiMeta?.supports_reasoning ?? (entry?.reasoning === true);
+
+    // Known output limit from /v1/models (primary) or models.dev (fallback).
+    // When NEITHER source knows the limit, leave max_completion_tokens UNSET
+    // so the request body sends no cap at all (server-side default) instead of
+    // a wrong 4096 cap that reasoning models can exhaust before any answer text.
+    const knownMaxCompletion = apiMeta?.max_completion_tokens ?? entry?.limit?.output;
 
     const config: TokenRhythmModelItem = {
         id: modelId,
@@ -146,8 +162,8 @@ function storeAutoDiscoveredConfig(
         displayName: entry?.name ?? modelId,
         vision: vision,
         supportsTemperature: entry?.temperature ?? true,
-        context_length: entry?.limit?.context ?? DEFAULT_CONTEXT_LENGTH,
-        max_completion_tokens: entry?.limit?.output ?? DEFAULT_MAX_TOKENS,
+        context_length: apiMeta?.context_length ?? (entry?.limit?.context ?? DEFAULT_CONTEXT_LENGTH),
+        ...(knownMaxCompletion !== undefined ? { max_completion_tokens: knownMaxCompletion } : {}),
         apiMode: apiMode,
         enable_thinking: hasReasoning,
         include_reasoning_in_request: hasReasoning,
@@ -164,7 +180,15 @@ function storeAutoDiscoveredConfig(
  * Returns undefined if the model ID was not auto-discovered.
  */
 export function getAutoDiscoveredModelConfig(modelId: string): TokenRhythmModelItem | undefined {
-    return _autoDiscoveredConfigs.get(modelId);
+    const config = _autoDiscoveredConfigs.get(modelId);
+    if (!config) {
+        return undefined;
+    }
+    // Return a shallow copy — provider.ts mutates the returned object per
+    // request (enable_thinking, temperature, reasoning_effort, …). Without the
+    // copy those mutations would leak into subsequent requests reusing the
+    // stored object (e.g. a stale reasoning_effort from a previous turn).
+    return { ...config };
 }
 
 /**
@@ -245,19 +269,29 @@ export async function prepareLanguageModelChatInformation(
             const newModelIds = [...apiModelIds].filter((id) => !builtInIds.has(id));
 
             if (newModelIds.length > 0) {
-                // Load models.dev metadata
+                // Load models.dev metadata (friendly names + fallback specs)
                 await ensureModelsDevLoaded();
+
+                // Full /v1/models metadata — the platform's own spec for context
+                // length, output limit and capability flags. Preferred over
+                // models.dev, whose catalog may lag or lack TokenRhythm entries
+                // (and whose fetch can fail, previously degrading specs to
+                // 128K context / 4096 output even though /v1/models had the
+                // real numbers cached all along).
+                const apiMetaList = await getApiModelMetadataList(apiKey);
+                const apiMetaMap = new Map<string, ApiModelMetadata>(apiMetaList.map((m) => [m.id, m]));
 
                 let addedCount = 0;
                 for (const modelId of newModelIds) {
+                    const apiMeta = apiMetaMap.get(modelId);
                     const entry = lookupModelDevEntry(modelId);
-                    const newInfo = buildAutoDiscoveredInfo(modelId, entry);
+                    const newInfo = buildAutoDiscoveredInfo(modelId, apiMeta, entry);
                     if (newInfo) {
                         infos.push(newInfo);
                         // Store config for later lookup by provider.ts.
                         // Models reporting supports_responses=true default to the Responses protocol.
                         const apiMode = responsesModelIds.has(modelId) ? "responses" : "openai";
-                        storeAutoDiscoveredConfig(modelId, entry, apiMode);
+                        storeAutoDiscoveredConfig(modelId, apiMeta, entry, apiMode);
                         addedCount++;
                     }
                 }

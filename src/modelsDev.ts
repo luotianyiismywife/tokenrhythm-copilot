@@ -46,6 +46,12 @@ let metadataMap: Map<string, ModelsDevEntry> | null = null;
 /** Map from short ID (last segment after slash) to entry. */
 let shortIdMap: Map<string, ModelsDevEntry> | null = null;
 let cacheTimestamp = 0;
+/** Timestamp of the last fetch ATTEMPT (success or failure). Used to back off
+ *  retries when the catalog is unreachable — without it every model list
+ *  refresh would re-hit the endpoint. */
+let lastAttemptAt = 0;
+/** Minimum delay between fetch attempts when loading fails (60s). */
+const RETRY_BACKOFF_MS = 60 * 1000;
 
 // ── Internal helpers ──
 
@@ -85,27 +91,41 @@ export async function ensureModelsDevLoaded(): Promise<void> {
     const now = Date.now();
 
     // Already loaded and fresh
-    if (metadataMap !== null && now - cacheTimestamp < CACHE_TTL_MS) {
+    if (metadataMap !== null && metadataMap.size > 0 && now - cacheTimestamp < CACHE_TTL_MS) {
         return;
     }
 
-    // Use stale cache if recent enough (within 2x TTL)
-    if (metadataMap !== null && now - cacheTimestamp < CACHE_TTL_MS * 2) {
+    // Use stale cache if recent enough (within 2x TTL) — but only when it
+    // actually contains data. An EMPTY map is the product of a failed initial
+    // load; bumping its timestamp here would "poison" the cache and pin the
+    // empty state for another full TTL window.
+    if (metadataMap !== null && metadataMap.size > 0 && now - cacheTimestamp < CACHE_TTL_MS * 2) {
         cacheTimestamp = now; // Bump timestamp to reduce retry frequency
         return;
     }
 
+    // Back off after a recent failed attempt — don't hammer the endpoint on
+    // every model list refresh while the network is flaky.
+    if (now - lastAttemptAt < RETRY_BACKOFF_MS) {
+        return;
+    }
+    lastAttemptAt = now;
+
     try {
         const data = await fetchModelsDevCatalog();
-        rebuildIndex(data);
-        cacheTimestamp = now;
+        if (Object.keys(data).length > 0) {
+            rebuildIndex(data);
+            cacheTimestamp = now;
+        }
+        // A successful fetch with an empty catalog is treated as a failure —
+        // keep whatever cache we have and retry after the backoff.
     } catch {
-        // Silent degradation — keep existing cache if any
+        // Silent degradation — keep existing cache if any. A failed initial
+        // load leaves metadataMap null so the next call (after the backoff)
+        // retries the fetch instead of serving an empty catalog for an hour.
         if (metadataMap === null) {
-            // No data at all — initialize empty maps
             metadataMap = new Map();
             shortIdMap = new Map();
-            cacheTimestamp = now;
         }
     }
 }

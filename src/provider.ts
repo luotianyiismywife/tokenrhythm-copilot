@@ -67,6 +67,40 @@ export const REASON_TEXT: Record<string, string> = {
 };
 
 /**
+ * Detect a finished stream that exhausted its token budget (finish/stop reason
+ * "length" or "max_tokens") without producing any answer text. This happens
+ * with reasoning models when thinking consumes the whole max_tokens budget
+ * (historically auto-discovered models declared a 4096 cap as fallback), and
+ * previously surfaced in Copilot Chat as "Sorry, no response was returned."
+ * with zero explanation. Throwing a descriptive error makes the root cause
+ * visible to the user and excludes this silent-empty path from the request logs.
+ */
+function checkZeroAnswerBudgetExhausted(
+    api: CommonApi<unknown, unknown>,
+    collectedOutputText: readonly string[],
+    modelId: string
+): void {
+    const finishReason = api.lastFinishReason;
+    if (
+        finishReason &&
+        (finishReason === "length" || finishReason === "max_tokens") &&
+        collectedOutputText.join("").trim().length === 0
+    ) {
+        logger.error("request.zeroAnswer", {
+            modelId,
+            finishReason,
+        });
+        throw new Error(
+            l10nFormat(
+                "The model used all available output tokens on reasoning ({0}, finish reason: {1}) and produced no answer. Lower the reasoning effort, or turn thinking off and retry.",
+                modelId,
+                finishReason
+            )
+        );
+    }
+}
+
+/**
  * 构建"全部 API Key 均不可用"的脱敏原因详情（供报错信息展示）。
  * 遍历 store 中每个 key，用其当前状态（冷却中 / 持久化不可用 / 余额不足）
  * 生成 `sk_****abcd: 原因` 列表。
@@ -539,6 +573,7 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                         abortController,
                         dispatchFetch,
                         timeoutId,
+                        collectedOutputText,
                         onUsage: (usage) => {
                             usageReportedDuringStream = true;
                             // Always report to native Copilot indicator (use original progress, not trackingProgress wrapper)
@@ -701,6 +736,8 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
         dispatchFetch: typeof fetch;
         timeoutId: ReturnType<typeof setTimeout> | undefined;
         onUsage: (usage: StreamUsage) => void;
+        /** Accumulated answer text (from trackingProgress) for zero-answer detection. */
+        collectedOutputText: readonly string[];
     }): Promise<void> {
         const {
             apiMode,
@@ -719,6 +756,7 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             dispatchFetch,
             timeoutId,
             onUsage,
+            collectedOutputText,
         } = params;
 
         if (apiMode === "anthropic") {
@@ -769,6 +807,8 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             }
             await anthropicApi.processStreamingResponse(response.body, trackingProgress, token);
 
+            // Zero-answer guard: budget exhausted with no answer text (see OpenAI branch)
+            checkZeroAnswerBudgetExhausted(anthropicApi, collectedOutputText, model.id);
             // --- Second round: handle ask_image tool call interception ---
             // Clear the first-round timeout before starting the second round
             clearTimeout(timeoutId);
@@ -830,6 +870,9 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                 throw new Error("No response body from Responses API");
             }
             await responsesApi.processStreamingResponse(response.body, trackingProgress, token);
+
+            // Zero-answer guard: budget exhausted with no answer text (see OpenAI branch)
+            checkZeroAnswerBudgetExhausted(responsesApi, collectedOutputText, model.id);
 
             // --- Second round: handle ask_image tool call interception ---
             clearTimeout(timeoutId);
@@ -895,6 +938,12 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             }
 
             await openaiApi.processStreamingResponse(response.body, trackingProgress, token);
+
+            // Zero-answer guard: the model finished on "length" (token budget
+            // exhausted, e.g. reasoning burned the whole max_completion_tokens)
+            // without producing ANY answer text. Copilot Chat would otherwise
+            // show "Sorry, no response was returned." with no hint why.
+            checkZeroAnswerBudgetExhausted(openaiApi, collectedOutputText, model.id);
 
             // --- Second round: handle ask_image tool call interception ---
             // Clear the first-round timeout before starting the second round

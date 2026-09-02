@@ -602,6 +602,9 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
         }
 
         const finish = (choice.finish_reason as string | undefined) ?? undefined;
+        if (finish) {
+            this._lastFinishReason = finish;
+        }
         if (finish === "tool_calls" || finish === "stop") {
             await this.flushToolCallBuffers(progress, true);
         }

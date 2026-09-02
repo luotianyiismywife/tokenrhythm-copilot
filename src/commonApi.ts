@@ -42,8 +42,18 @@ export abstract class CommonApi<TMessage, TRequestBody> {
     /** Track if we emitted any thinking text. */
     protected _hasEmittedThinking = false;
 
+    /** Finish/stop reason of the most recent stream (e.g. "length", "max_tokens"),
+     *  used to detect budget exhaustion with zero answer text. */
+    protected _lastFinishReason: string | undefined;
+
     /** Track if we emitted the begin-tool-calls whitespace flush. */
     protected _emittedBeginToolCallsHint = false;
+
+    /** Finish/stop reason of the most recent stream (e.g. "length", "max_tokens").
+     *  Read by provider.ts to detect budget exhaustion with zero answer text. */
+    public get lastFinishReason(): string | undefined {
+        return this._lastFinishReason;
+    }
 
     // XML think block parsing state
     protected _xmlThinkActive = false;
@@ -264,6 +274,7 @@ export abstract class CommonApi<TMessage, TRequestBody> {
         this._hasEmittedAssistantText = false;
         this._hasEmittedText = false;
         this._hasEmittedThinking = false;
+        this._lastFinishReason = undefined;
         this._emittedBeginToolCallsHint = false;
         this._xmlThinkActive = false;
         this._xmlThinkDetectionAttempted = false;
