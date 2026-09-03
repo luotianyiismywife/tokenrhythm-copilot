@@ -24,6 +24,8 @@ import {
     markApiKeyExhausted,
     maskApiKey,
     pickNextApiKey,
+    setActiveKeyByValue,
+    shouldSingleKeyFallbackSwitch,
     type ApiKeyEntry,
 } from "../keyManager";
 import { getBalanceCheckEnabled, checkKeyBalance } from "../balanceCheck";
@@ -305,7 +307,6 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         // ── Multi-API-Key rotation loop for commit generation ──────────────────
         const apiKeyMode = getApiKeyMode();
         const singleFallback = getSingleKeyFallback();
-        let usedFallbackKey = false; // single mode fell back to rotation
         let response = "";
         // Track per-key failure reasons so the "all keys exhausted" error can
         // show which key failed and why (masked), and distinguish transient
@@ -341,9 +342,21 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
 
             let entry = await pickNextApiKey(secrets, apiKeyMode);
             if (!entry) {
-                if (apiKeyMode === "single" && singleFallback === "switch" && !usedFallbackKey) {
-                    usedFallbackKey = true;
+                // single mode + fallback=switch → switch ONLY when the current key
+                // is balance-exhausted (402 / balance pre-check failed this round);
+                // the new key also becomes the "current" key. Other rotation errors
+                // (401 invalid key, 429/503 transient) do NOT switch — they fail
+                // below (the transient whole-round retry still applies for 429/503).
+                if (
+                    apiKeyMode === "single" &&
+                    singleFallback === "switch" &&
+                    (await shouldSingleKeyFallbackSwitch(secrets, failedKeys))
+                ) {
                     entry = await pickNextApiKey(secrets, "rotation");
+                    if (entry) {
+                        await setActiveKeyByValue(secrets, entry.value);
+                        logger.info("commit.key.singleSwitch", { key: maskApiKey(entry.value) });
+                    }
                 }
                 if (!entry) {
                     // Every key is excluded (persisted unavailable / cooldown /
@@ -357,9 +370,19 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                         failedKeys.clear();
                         continue;
                     }
-                    // Show why each key can't be used.
+                    // Show why each key can't be used. In single mode only the
+                    // current key (plus any switched-to keys) were tried — use a
+                    // dedicated message instead of "all keys unavailable".
                     const detail = await buildAllKeysUnavailableDetail(secrets);
                     logger.warn("commit.key.allUnavailable", { detail });
+                    if (apiKeyMode === "single") {
+                        throw new Error(
+                            l10nFormat(
+                                "Current API key is unavailable ({0}). Single mode only switches keys on insufficient balance (402); retry later or check via the Manage API Keys command.",
+                                detail
+                            )
+                        );
+                    }
                     throw new Error(
                         l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail)
                     );

@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.12.0",
+	"version": "1.12.1",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -379,7 +379,7 @@
 				"tokenrhythm.singleKeyFallback": {
 					"type": "string",
 					"enum": ["error", "switch"],
-					"default": "error",
+					"default": "switch",
 					"enumDescriptions": [
 						"%config.singleKeyFallback.enum.error.desc%",
 						"%config.singleKeyFallback.enum.switch.desc%"

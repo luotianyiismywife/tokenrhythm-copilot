@@ -1,5 +1,14 @@
 # 更新日志（Changelog）
 
+## v1.12.1 (2026-09-04)
+
+### single 模式自动切换收窄为仅余额不足
+
+- **「仅余额不足（402）才切换」**：`single` 模式（`tokenrhythm.singleKeyFallback=switch`）的自动切换条件从"任何轮换错误"收窄为**仅在当前 key 余额不足**（402 或余额预检不足）时切换到下一个可用 key——余额不足是确定性失败，换一个有余额的 key 即可继续；401 无效 Key 属配置问题应报错交由用户处理；429 限流 / 503 服务端繁忙是瞬态错误（多为平台整体状态，换 key 规避不了），不再切换，改由瞬态整轮自动重试（清冷却 + 指数退避）兜底，重试用尽后报 single 专属错误（含脱敏 key + 原因）。
+- **切换后设为当前使用**：402 自动切换时把新 key 经 `setActiveKeyByValue` 设为 single 模式的当前 key（管理界面 ★ Current 标记同步跟随）——后续请求直接使用新 key，不再每次请求都重复"fallback 选择 + 弹窗通知"。
+- **默认行为优化**：`singleKeyFallback` 默认值由 `error`（任何错误直接报错）改为 `switch`（仅余额不足自动切换），single 模式开箱即可在多 key 间按余额自动容灾；仍可选择 `error` 严格模式。
+- **报错文案区分**：single 模式 key 不可用时的错误不再沿用误导性的"所有 API Key 均不可用"，改为 single 专属文案（"当前 API Key 不可用（原因）。single 模式仅在余额不足（402）时才自动切换 key…"）。
+
 ## v1.12.0 (2026-09-03)
 
 ### 修复「Sorry, no response was returned」空响应

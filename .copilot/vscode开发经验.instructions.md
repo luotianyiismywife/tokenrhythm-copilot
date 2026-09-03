@@ -66,7 +66,7 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 | **name/version 来源** | `package.json` 的 `name` 字段（`tokenrhythm-copilot`）+ `version` 字段（如 `1.6.0`） |
 | **GitHub Release 附件** | 上传 `<name>-<version>.vsix`，下载链接即 `.../releases/download/<tag>/<name>-<version>.vsix` |
 | **tag 格式** | `vX.Y.Z`（如 `v1.6.0`），指向对应版本提交 |
-| **版本号语义** | 功能新增 → bump minor（1.5.0 → 1.6.0）；bugfix → bump patch；不向后兼容 → bump major |
+| **版本号语义** | 现有功能调整 / 修 bug → 只升 z（patch，如 1.5.0 → 1.5.1）；新增功能 → 升 y（minor，如 1.5.0 → 1.6.0）；完全重构（不向后兼容）→ 升 x（major，如 1.5.0 → 2.0.0） |
 | **版本号占用检查** | 打包/发布前必须确认：`git tag -l "v*"` 看最新 tag，**不能在已发布的 tag 上重复发布同版本**（市场拒绝同版本重复上传；GitHub Release 可覆盖但不应依赖） |
 | **发布后产物位置** | 本地根目录 `<name>-<version>.vsix`（`.gitignore` 已忽略，不入库）；release 附件由浏览器流程上传 |
 

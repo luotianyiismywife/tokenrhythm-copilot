@@ -170,7 +170,9 @@ const zhCN: Record<string, string> = {
 	"Rate limited (429)": "限流 (429)",
 	"Server error (503)": "服务端繁忙 (503)",
 	"API error": "API 错误",
-	"Current API key is unavailable, switched to {0}": "当前 API Key 不可用，已切换到 {0}",
+	"Current API key is out of balance, switched to {0} and set it as the current key": "当前 API Key 余额不足，已切换到 {0} 并设为当前使用",
+	"Current API key is unavailable ({0}). Single mode only switches keys on insufficient balance (402); retry later or check via the Manage API Keys command.":
+		"当前 API Key 不可用（{0}）。single 模式仅在余额不足（402）时才自动切换 key；请稍后重试，或使用「管理 API Keys」命令检测/切换。",
 	"No API keys configured": "未配置 API Key",
 	"Empty input ignored": "空输入已忽略",
 	// extension.ts - Cookie 下可用 Key 数量展示（GET /api/api-keys）

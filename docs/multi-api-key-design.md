@@ -25,7 +25,7 @@
 |------|------|
 | `sticky`（默认） | 固定使用一个 key（轮询游标钉住不前移），前缀缓存命中率最高；仅当该 key 失效（余额不足/401/429/503 等）时才切换到下一个可用 key 并钉住；原 key 恢复后**不自动切回**，保持缓存亲和性 |
 | `rotation` | 请求轮流使用各 key（轮询，每次请求成功/失败都换 key），自动跳过不可用的 key |
-| `single` | 仅使用用户指定的"当前 key"；不可用时按 `tokenrhythm.singleKeyFallback` 设置决定：`error`（默认，直接报错不切换）或 `switch`（自动切换到下一个可用 key，并右下角弹窗提示） |
+| `single` | 仅使用用户指定的"当前 key"；按 `tokenrhythm.singleKeyFallback` 设置决定失败行为：`switch`（默认，**仅在当前 key 余额不足（402 / 预检不足）时**自动切换到下一个可用 key 并设为当前使用，右下角弹窗提示；401/429/503 等其他错误不切换、走 single 专属报错）或 `error`（任何错误直接报错不切换） |
 
 **余额管理核心机制：**
 
@@ -114,12 +114,14 @@ const balanceCache = new Map<string, BalanceCacheEntry>();
 |------|------|------|
 | `getApiKeyStore(secrets)` | `(secrets) => Promise<ApiKeyStore>` | 读取并缓存 store；自动迁移旧 `tokenrhythm.apiKey`；JSON 损坏时回退修复 |
 | `saveApiKeyStore(secrets, store)` | `(secrets, store) => Promise<void>` | 写新格式；成功后删除旧 key（幂等） |
-| `getApiKeyMode()` / `getSingleKeyFallback()` | 同步 | 读取 `apiKeyMode`（默认 rotation）/ `singleKeyFallback`（默认 error），非法值回退 |
+| `getApiKeyMode()` / `getSingleKeyFallback()` | 同步 | 读取 `apiKeyMode`（默认 sticky）/ `singleKeyFallback`（默认 switch），非法值回退 |
 | `getRotationStatusCodes()` / `getRotationErrorPatterns()` | 同步 | 触发轮换的状态码（**默认 [401,402,429,503]**）/ 文本 patterns |
 | `getTransientRetryStatusCodes()` / `getTransientRetryTimes()` | 同步 | 触发瞬态整轮重试的状态码（**默认 [429,503]**，与轮换状态码解耦）/ 重试次数（默认 3，0 禁用） |
 | `getExhaustedCooldownMin()` | 同步 | 429/503 瞬态冷却时长（分钟，默认 10） |
 | `getPrimaryApiKey(secrets)` | `(secrets) => Promise<ApiKeyEntry \| undefined>` | 模型列表/同步用：single→active；rotation→第一个可用的（跳过冷却与不可用） |
 | `pickNextApiKey(secrets, mode)` | `(secrets, mode) => Promise<ApiKeyEntry \| undefined>` | 轮询/单 key 选择逻辑（见 3.2） |
+| `shouldSingleKeyFallbackSwitch(secrets, failedKeys)` | `(secrets, failedKeys) => Promise<boolean>` | single+fallback=switch 时是否应切换：仅本轮 active key 因余额不足（402/预检）失败才 true；401/429/503 与历史遗留不可用均不切换 |
+| `setActiveKeyByValue(secrets, keyValue)` | `(secrets, keyValue) => Promise<void>` | 按值把 key 设为 single 当前 key（402 自动切换后调用，后续请求直接用新 key，避免重复 fallback+弹窗） |
 | `getTransientExhaustedInfo(keyValue)` | 同步 | 查询瞬态冷却状态（原因 + 剩余秒数），冷却到期自动清除 |
 | `hasTransientExhaustedKey(secrets)` | 异步 | 是否存在冷却中的 key（供\"全部不可选\"时判断是否值得整轮自动重试） |
 | `isApiKeyEligible(entry)` | 同步 | 判断是否可被选中（非冷却中、非 `available=false`） |
@@ -198,7 +200,8 @@ pickNextApiKey(secrets, mode):
 | A6 | 部分 key 持久化不可用（余额/401） | 跳过，选下一个 | ✅ |
 | A7 | 轮询游标越界（删除 key 后） | 取模回绕，不越界 | ✅ |
 | A8 | single 模式 active 不可用，fallback=`error` | 直接报错，不切换 | ✅ |
-| A9 | single 模式 active 不可用，fallback=`switch` | 降级为 rotation 选择下一个可用 key；成功后右下角通知"当前 Key 不可用（原因），已切换到 sk_****abcd" | ✅ |
+| A9 | single 模式 active 不可用，fallback=`switch` 且本轮原因为余额不足（402/预检） | 降级为 rotation 选择下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用；成功后右下角通知"当前 Key 余额不足，已切换到 sk_****abcd 并设为当前使用" |
+| A9b | single 模式 active 因 401/429/503 失败（fallback=`switch`） | **不切换**（401 属配置问题、429/503 属瞬态由整轮重试兜底）→ 报 single 专属错误"当前 Key 不可用（原因）…" | ✅ |
 | A10 | single fallback=`switch` 且所有 key 均不可用 | 按 A4 汇总报错，不弹切换通知 | ✅ |
 | B1 | 预检：cookie 有效，余额 > minBalanceCny | 使用该 key | ✅ |
 | B2 | 预检：cookie 有效，余额 ≤ minBalanceCny | 标记不可用（持久化），跳过换下一个 | ✅ |
@@ -248,8 +251,9 @@ pickNextApiKey(secrets, mode):
 |---|------|------|------|
 | E1 | 无 key | 弹输入框添加（现有行为） | ✅ |
 | E2 | rotation 模式 | 与聊天相同：预检 + 轮换循环 | ✅ |
-| E3 | single 模式，fallback=`error` | 用指定 key，不可用直接报错不切换 | ✅ |
-| E9 | single 模式，fallback=`switch` | 降级为 rotation 选下一个可用 key，弹窗提示（同 A9） | ✅ |
+| E3 | single 模式，fallback=`error` | 用指定 key，任何错误直接报错不切换 | ✅ |
+| E9 | single 模式，fallback=`switch`，当前 key 余额不足（402/预检） | 降级为 rotation 选下一个可用 key 并经 `setActiveKeyByValue` 设为当前（同 A9，无弹窗） | ✅ |
+| E9b | single 模式，fallback=`switch`，当前 key 因 401/429/503 失败 | 不切换，报 single 专属错误（同 A9b） | ✅ |
 | E10 | single fallback=`switch` 且全部不可用 | 按 E7 汇总报错 | ✅ |
 | E4 | 402/401 | 标记不可用，换下一个 key 重试 | ✅ |
 | E5 | 429/503 | 瞬态冷却，换下一个 key 重试；全部瞬态失败 → 整轮自动重试（同 C8b） | ✅ |
@@ -318,7 +322,7 @@ pickNextApiKey(secrets, mode):
 | # | 情况 | 处理 | 覆盖 |
 |---|------|------|------|
 | J1 | `apiKeyMode` 非法值 | 回退 `rotation` | ✅ |
-| J10 | `singleKeyFallback` 非法值 | 回退 `error` | ✅ |
+| J10 | `singleKeyFallback` 非法值 | 回退 `switch` | ✅ |
 | J2 | `apiKeyRotationStatusCodes` 空数组 | 仅按文本 patterns 匹配 | ✅ |
 | J3 | `apiKeyRotationErrorPatterns` 空数组 | 仅按状态码匹配 | ✅ |
 | J4 | 两者都空 | 禁用被动轮换（仅主动预检） | ✅ |
@@ -352,10 +356,10 @@ pickNextApiKey(secrets, mode):
 ## 5. 设置项（package.json configuration）
 
 ```jsonc
-"tokenrhythm.apiKeyMode": { "type": "string", "enum": ["rotation", "single"], "default": "rotation" },
+"tokenrhythm.apiKeyMode": { "type": "string", "enum": ["sticky", "rotation", "single"], "default": "sticky" },
 "tokenrhythm.singleKeyFallback": {
-  "type": "string", "enum": ["error", "switch"], "default": "error",
-  "description": "single 模式下当前 key 不可用时的行为：error=直接报错不切换；switch=自动切换到下一个可用 key 并右下角弹窗提示"
+  "type": "string", "enum": ["error", "switch"], "default": "switch",
+  "description": "single 模式下当前 key 失败时的行为：error=任何错误直接报错不切换；switch=仅在当前 key 余额不足（402/预检不足）时自动切换到下一个可用 key 并设为当前使用（右下角弹窗提示），401/429/503 等其他错误不切换"
 },
 "tokenrhythm.apiKeyRotationStatusCodes": { "type": "array", "items": { "type": "number" }, "default": [401, 402, 429, 503] },
 "tokenrhythm.apiKeyRotationErrorPatterns": {
@@ -402,7 +406,7 @@ pickNextApiKey(secrets, mode):
 | V4 | 对 B 检测可用性 | 余额不足 → 保持不可用 | ✅ |
 | V5 | B 充值后检测可用性 | 标记可用（自愈） | ✅ |
 | V6 | `minBalanceCny` 调到高于 A 余额 | A 在预检中被跳过，自动用其他 key | ✅ |
-| V7 | single 模式指向不可用 key | 报错且不切换 | ✅ |
+| V7 | single 模式指向余额不足 key | fallback=switch：自动切换下一个可用 key 并设为当前（弹窗）；fallback=error：报错不切换 | ✅ |
 | V8 | 无 cookie 的 key + 构造 402 | 被动检测切换 | ✅ |
 | V9 | cookie 失效 | 回退被动，请求仍能发出 | ✅ |
 | V10 | Git 提交生成（rotation） | 正常轮换 | ✅ |

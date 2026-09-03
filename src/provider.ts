@@ -48,6 +48,8 @@ import {
     markApiKeyExhausted,
     markApiKeyAvailable,
     resetExhaustedKeys,
+    setActiveKeyByValue,
+    shouldSingleKeyFallbackSwitch,
     addApiKey,
     maskApiKey,
     type ApiKeyEntry,
@@ -457,7 +459,7 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
             const apiKeyMode = getApiKeyMode();
             const singleFallback = getSingleKeyFallback();
             let currentEntry: ApiKeyEntry | undefined;
-            let usedFallbackKey = false; // single mode fell back to rotation
+            let usedFallbackKey = false; // single mode performed a balance-triggered switch (drives the success notification)
             // Track per-key failure reasons so the "all keys exhausted" error can
             // show which key failed and why (masked), and distinguish transient
             // failures (429/503 — retry later) from permanent ones (402/401 — check).
@@ -499,10 +501,24 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                 // 1. Pick the next candidate key
                 currentEntry = await pickNextApiKey(this.secrets, apiKeyMode);
                 if (!currentEntry) {
-                    // single mode + fallback=switch → degrade to rotation
-                    if (apiKeyMode === "single" && singleFallback === "switch" && !usedFallbackKey) {
+                    // single mode + fallback=switch → switch ONLY when the current
+                    // key is balance-exhausted (402 / balance pre-check failed this
+                    // round). Other rotation errors (401 invalid key, 429/503
+                    // transient) do NOT switch — they fail below (the transient
+                    // whole-round retry still applies for 429/503). On a balance
+                    // switch the new key also becomes the "current" key so later
+                    // requests use it directly (no repeated fallback+notification).
+                    if (
+                        apiKeyMode === "single" &&
+                        singleFallback === "switch" &&
+                        (await shouldSingleKeyFallbackSwitch(this.secrets, failedKeys))
+                    ) {
                         usedFallbackKey = true;
                         currentEntry = await pickNextApiKey(this.secrets, "rotation");
+                        if (currentEntry) {
+                            await setActiveKeyByValue(this.secrets, currentEntry.value);
+                            logger.info("key.singleSwitch", { key: maskApiKey(currentEntry.value) });
+                        }
                     }
                     if (!currentEntry) {
                         // Every key is excluded (persisted unavailable / cooldown /
@@ -516,9 +532,19 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                             failedKeys.clear();
                             continue;
                         }
-                        // Show why each key can't be used.
+                        // Show why each key can't be used. In single mode only the
+                        // current key (plus any switched-to keys) were tried — use
+                        // a dedicated message instead of "all keys unavailable".
                         const detail = await buildAllKeysUnavailableDetail(this.secrets);
                         logger.warn("key.allUnavailable", { detail });
+                        if (apiKeyMode === "single") {
+                            throw new Error(
+                                l10nFormat(
+                                    "Current API key is unavailable ({0}). Single mode only switches keys on insufficient balance (402); retry later or check via the Manage API Keys command.",
+                                    detail
+                                )
+                            );
+                        }
                         throw new Error(
                             l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail)
                         );
@@ -594,7 +620,10 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
                     }
                     if (usedFallbackKey) {
                         vscode.window.showInformationMessage(
-                            l10nFormat("Current API key is unavailable, switched to {0}", maskApiKey(currentEntry.value))
+                            l10nFormat(
+                                "Current API key is out of balance, switched to {0} and set it as the current key",
+                                maskApiKey(currentEntry.value)
+                            )
                         );
                     }
                     break;

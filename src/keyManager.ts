@@ -35,7 +35,13 @@ export interface ApiKeyStore {
 /** key 使用模式 */
 export type ApiKeyMode = "rotation" | "single" | "sticky";
 
-/** single 模式当前 key 不可用时的行为 */
+/**
+ * single 模式当前 key 不可用时的行为：
+ * - error：任何错误都直接报错，不切换
+ * - switch：仅在当前 key **余额不足**（402 / 余额预检不足）时自动切换到下一个可用 key
+ *   并设为当前使用；其他轮换错误（401 无效 Key / 429 限流 / 503 繁忙）不切换——
+ *   401 属配置问题应报错交由用户处理，429/503 属瞬态错误由瞬态整轮重试兜底
+ */
 export type SingleKeyFallback = "error" | "switch";
 
 const STORE_KEY = "tokenrhythm.apiKeys";
@@ -72,10 +78,10 @@ export function getRotationCursorIndex(): number {
     return rotationIndex;
 }
 
-/** 读取 single 模式不可用时的行为（默认 error；非法值回退 error） */
+/** 读取 single 模式不可用时的行为（默认 switch；非法值回退 switch） */
 export function getSingleKeyFallback(): SingleKeyFallback {
-    const fallback = getConfig().get<string>("singleKeyFallback", "error");
-    return fallback === "switch" ? "switch" : "error";
+    const fallback = getConfig().get<string>("singleKeyFallback", "switch");
+    return fallback === "error" ? "error" : "switch";
 }
 
 /** 读取触发轮换的状态码列表（默认 [401, 402, 429, 503]） */
@@ -361,6 +367,47 @@ export async function pickNextApiKey(
         }
     }
     return undefined;
+}
+
+/**
+ * single 模式（fallback=switch）下是否应因当前 key 不可用而自动切换。
+ * 仅当**本轮请求**中当前 active key 因“余额不足”失败（`failedKeys` 记录的 reason ===
+ * "balance"，来源：402 轮换错误或余额预检不足）时返回 true：
+ * - balance（402）：确定性失败，换一个有余额的 key 即可继续 → 切换
+ * - invalid（401）：key 配置问题，应报错交由用户处理 → 不切换
+ * - rate_limited / server_error（429/503）：瞬态错误，换 key 规避不了平台限流/繁忙，
+ *   由瞬态整轮重试兜底 → 不切换
+ *
+ * 本轮 `failedKeys` 无记录（请求开始时 active key 已因**历史**请求处于不可用/冷却状态）
+ * 时不切换：上次 402 切换成功时 activeIndex 已随 `setActiveKeyByValue` 移到新 key，
+ * 不会再走到这里；剩余场景（error 模式遗留、上次切换失败）直接报错更符合 single 模式
+ * “严格使用当前 key”的语义。
+ */
+export async function shouldSingleKeyFallbackSwitch(
+    secrets: vscode.SecretStorage,
+    currentRequestFailures: ReadonlyMap<string, string>
+): Promise<boolean> {
+    const store = await getApiKeyStore(secrets);
+    const active = store.keys[store.activeIndex] ?? store.keys[0];
+    if (!active) {
+        return false;
+    }
+    return currentRequestFailures.get(active.value) === "balance";
+}
+
+/**
+ * 按 key 值把指定 key 设为 single 模式的当前 key（activeIndex 跟随移动）。
+ * 供 single 模式 402 余额不足自动切换后调用——后续请求直接使用新 key，
+ * 避免每次请求都重复“fallback 选择 + 弹窗通知”。
+ */
+export async function setActiveKeyByValue(secrets: vscode.SecretStorage, keyValue: string): Promise<void> {
+    const store = await getApiKeyStore(secrets);
+    const idx = store.keys.findIndex((k) => k.value === keyValue);
+    if (idx < 0 || idx === store.activeIndex) {
+        return;
+    }
+    store.activeIndex = idx;
+    await saveApiKeyStore(secrets, store);
 }
 
 // ---------------------------------------------------------------------------
