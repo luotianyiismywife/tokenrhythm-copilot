@@ -11,7 +11,6 @@ import { logger } from "../logger";
 import { l10n, l10nFormat } from "../localize";
 import type { TokenRhythmModelItem } from "../types";
 import {
-    addApiKey,
     getApiKeyMode,
     getApiKeyStore,
     getKeyRotationReason,
@@ -170,20 +169,9 @@ async function ensureApiKeyEntry(secrets: vscode.SecretStorage): Promise<ApiKeyE
     if (store.keys.length > 0) {
         return store.keys[store.activeIndex] ?? store.keys[0];
     }
-
-    const entered = await vscode.window.showInputBox({
-        title: l10n("TokenRhythm Provider API Key"),
-        prompt: l10n("Enter your TokenRhythm API key"),
-        ignoreFocusOut: true,
-        password: true,
-    });
-    if (entered && entered.trim()) {
-        const added = await addApiKey(secrets, { value: entered.trim(), available: null });
-        if (added) {
-            const updated = await getApiKeyStore(secrets);
-            return updated.keys[0];
-        }
-    }
+    // No key configured — return undefined silently (no input prompt).
+    // The caller throws the "API key not found" error; keys are added via
+    // the Manage API Keys command.
     return undefined;
 }
 

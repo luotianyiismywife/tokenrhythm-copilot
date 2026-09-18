@@ -37,14 +37,6 @@ import {
 } from "./balanceCheck";
 import { getVisionSupportedModelIds } from "./apiModelList";
 
-// ---- Walkthrough / Welcome constants ----
-
-/** memento key tracking whether the welcome walkthrough has been shown. */
-const WELCOME_SHOWN_KEY = "tokenrhythm.welcomeShown";
-
-/** Walkthrough contribution ID (publisher.extension#walkthroughId). */
-const WALKTHROUGH_ID = "luotianyiismywife.tokenrhythm-copilot-provider#tokenRhythmGettingStarted";
-
 /**
  * 格式化余额详情为显示文本：充值余额 + 赠送余额（含有效期）。
  * 平台余额分「充值」与「赠送（限时）额度」两部分，分开显示；
@@ -388,9 +380,6 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
-
-    // Show welcome walkthrough on first install (when no API key is configured)
-    showWelcomeIfNeeded(context);
 
     // Startup model sync — checks for new TokenRhythm models at most once per
     // day and logs a single line to the "TokenRhythm" Output channel.
@@ -1010,28 +999,6 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             default:
                 return;
         }
-    }
-}
-
-/**
- * Show the welcome walkthrough on first activation if no API key is configured.
- * Once shown (or if a key already exists) the flag is persisted so it won't
- * reappear after subsequent reloads.
- */async function showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void> {
-    try {
-        if (context.globalState.get<boolean>(WELCOME_SHOWN_KEY)) {
-            return;
-        }
-        const store = await getApiKeyStore(context.secrets);
-        if (store.keys.length > 0) {
-            // API key already set — no need to show welcome
-            await context.globalState.update(WELCOME_SHOWN_KEY, true);
-            return;
-        }
-        await vscode.commands.executeCommand("workbench.action.openWalkthrough", WALKTHROUGH_ID, false);
-        await context.globalState.update(WELCOME_SHOWN_KEY, true);
-    } catch (error) {
-        logger.warn("Failed to show welcome walkthrough", { error: String(error) });
     }
 }
 

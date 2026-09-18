@@ -50,7 +50,7 @@
 | **超时控制** | 可配置的请求超时时间（默认 10 分钟） |
 | **立即取消** | 取消请求时通过 `reader.cancel()` 立即中断流式读取，停止后台接收 |
 | **视觉代理配置** | 支持通过设置 `tokenrhythm.visionProxyModel`、`tokenrhythm.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`tokenrhythm.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="disabled"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉模型仅从本供应商（tokenrhythm）查找**（`findVisionModel` 多级回退匹配裸 ID/完整 ID，修复 issue #3——`selectChatModels` 裸 ID 精确匹配带 vendor 前缀的完整 identifier 会落空）。**视觉代理模型动态选择**：`tokenrhythm.setVisionProxyModel` 命令从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表（实测含 kimi-k2.5/k2.6/k2.7-code、qwen3.8-max、seed-2.1-turbo/pro），QuickPick 选择代替手填；API 不可用时回退手填 |
-| **安装欢迎页 (Walkthrough)** | 首次安装且未配置 API Key 时自动打开引导向导，指引用户设置 API Key 和打开语言模型管理器。包含 3 个步骤：设置 API Key、显示模型、高级设置。通过 `onStartupFinished` 激活事件确保在 VS Code 启动后立即检测 |
+| **安装欢迎页 (Walkthrough)** | 引导向导（3 个步骤：设置 API Key、显示模型、高级设置），**仅可手动打开**（命令面板 → Welcome: Open Walkthrough）。**不再自动弹出**（2026-09-18 移除首次安装自动打开逻辑——未配置 key 时启动/请求均静默，不弹任何引导界面） |
 
 ### 1.3 模型清单
 
@@ -146,7 +146,6 @@ activate(context)
   │   ├── tokenrhythm.generateGitCommitMessage ← 生成提交消息
   │   ├── tokenrhythm.abortGitCommitMessage    ← 中止生成
   │   └── tokenrhythm.setModelPreset           ← 设置模型预设
-  ├── showWelcomeIfNeeded()                 ← 首次安装时显示欢迎向导
   ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，结果以一行日志输出）
   └── 注册 dispose 清理
 ```
@@ -190,7 +189,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   ├── 6. 应用请求延迟 (delay)
   │
   ├── 7. 确保至少一个 API Key 存在（ensureApiKey → keyManager.getApiKeyStore）
-  │       └── 无 key 时弹输入框引导添加第一个
+  │       └── 无 key 时静默返回 undefined → 抛出 "TokenRhythm API key not found"（不弹任何输入框）
   │
   ├── 8. 创建请求超时 AbortController
   │      └── 连接 VS Code 取消令牌 → abort()
@@ -508,7 +507,7 @@ test/
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `extension.ts` | ~870 | 扩展激活/停用，注册 Provider 和 7 条命令，`manageApiKeys` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key/**余额显示**），首次安装欢迎页引导 |
+| `extension.ts` | ~870 | 扩展激活/停用，注册 Provider 和 7 条命令，`manageApiKeys` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key/**余额显示**） |
 | `provider.ts` | ~1290 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由、多 key 轮换循环、余额预检、被动切换）及图片代理多轮循环处理 |
 | `keyManager.ts` | ~500 | 多 API Key 管理：SecretStorage 存取与旧 key 迁移、sticky/rotation/single 选择逻辑、可用性状态（持久化 available + 瞬态冷却）、轮换错误判定、脱敏、批量添加（addApiKeys）、三字段编辑（updateApiKey） |
 | `balanceCheck.ts` | ~260 | 余额查询：cookie 认证 `GET /api/usage-summary`、TTL 缓存、`checkKeyBalance` 预检（返回余额值供日志/UI 展示）、`isKeyBalanceSufficient` 快捷判断、`testKeyAvailability` 手动检测（查余额 + 最小聊天请求）；**平台 Key 列表查询**：`GET /api/api-keys`（仅需 tr_session，无 CSRF）、`queryApiKeysByCookie`/`getApiKeysByCookieCached`（TTL 缓存，返回含 id/name/maskedKey/status 等的完整列表，供 UI 展示 "平台 Key：N / 10"） |
@@ -556,7 +555,7 @@ test/
 ### 4.1 `src/extension.ts`
 
 #### `activate(context: vscode.ExtensionContext): void`
-扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册七条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设、管理 API Keys）；首次安装时调用 `showWelcomeIfNeeded()` 显示欢迎页引导。
+扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册七条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设、管理 API Keys）。**不弹任何引导界面**——未配置 key 时启动静默，key 管理仅经显式命令进入。
 
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
 多 Key 管理 QuickPick 主流程（`tokenrhythm.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**两种余额+赠送有效期**标记；sticky 模式下另显示 `$(pinned) 当前固定` 只读标记，指向 `getRotationCursorIndex()` 游标所指 key），支持动作：添加 Key（依次输入 key/cookie/备注）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 key/cookie/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`pickKey`。
@@ -564,9 +563,6 @@ test/
 **余额显示（2026-08-15 升级为两种余额+赠送有效期）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均通过 `getBalanceDetailCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询完整余额详情并展示——充值余额 `availableBalanceCny - expiringBalanceCny` 显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error 即轮询会被跳过），赠送余额 `expiringBalanceCny` 显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 有效期，`nextExpiryAt` 经 `formatExpiryDate` 本地时区格式化）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。格式化逻辑集中在 `formatBalanceDetailText`（模块级函数）。**类型守卫（2026-08-14）**：`toFixed(2)` 前金额统一经 `queryBalanceDetail` 的 `toNumber` 强制转 number（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
 
 **平台 Key 数量展示（2026-08-24）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均对绑定 cookie 的 key 经 `getApiKeysByCookieCached`（TTL 缓存，按 cookie 去重查询，避免多个 key 共享同一 cookie 时重复请求）查询 `GET /api/api-keys`，展示 `平台 Key：N / 10`（`status==="enabled"` 的 key 数量 / 平台上限 10，停用/删除的 key 不占上限）；查询失败显示 `$(warning) 平台 Key 数量未知`，未绑定 cookie 不显示。格式化逻辑集中在 `formatPlatformKeysText`（模块级函数），查询逻辑集中在 `fetchPlatformKeyListsByCookie`（按 cookie 去重）。
-
-#### `showWelcomeIfNeeded(context: vscode.ExtensionContext): Promise<void>`
-检查是否已显示过欢迎页（通过 `globalState` 的 `WELCOME_SHOWN_KEY` 标记）。如果已标记或已有 API Key，直接返回；否则通过 `workbench.action.openWalkthrough` 命令打开 Walkthrough 页面并标记为已显示。静默处理异常，不阻塞扩展激活。
 
 #### `deactivate(): void`
 扩展停用。清理资源（日志 dispose）。
@@ -616,7 +612,7 @@ test/
 - `thinking` 字段值统一使用字符串（`"enabled"` / `"disabled"`），与 `prepareRequestBody` 保持一致。
 
 #### `private async ensureApiKey(): Promise<ApiKeyEntry | undefined>`
-确保至少一个 API Key 存在（经 keyManager.getApiKeyStore）。无任何 key 时弹出输入框引导添加第一个（写入多 key 存储）。轮换循环在请求前调用，为空时抛出"TokenRhythm API key not found"。
+静默检查 API Key（经 keyManager.getApiKeyStore），返回 active（或第一个）key 条目。**无任何 key 时静默返回 undefined，不弹输入框**（2026-09-18 移除弹窗引导——未配置 key 时请求直接失败，报错 "TokenRhythm API key not found" 由 VS Code 在聊天内联展示；添加 key 走 `tokenrhythm.manageApiKeys` 命令）。轮换循环在请求前调用。
 
 #### `export const REASON_TEXT: Record<string, string>`
 key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid`/`rate_limited`/`server_error`/`api_error`/`unavailable`。供"全部 key 不可用"报错展示（`l10n(REASON_TEXT[reason])`）。
@@ -1560,7 +1556,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 为单个仓库生成提交消息。显示进度条，支持取消。
 
 #### `ensureApiKeyEntry(secrets): Promise<ApiKeyEntry | undefined>`
-确保 API Key 存在（经 keyManager.getApiKeyStore）；无任何 key 时弹输入框引导添加第一个。
+静默检查 API Key（经 keyManager.getApiKeyStore），返回 active（或第一个）key 条目；**无任何 key 时静默返回 undefined，不弹输入框**（2026-09-18 移除弹窗引导），由调用方抛出 "TokenRhythm API key not found" 错误。
 
 #### `performCommitMsgGeneration(secrets, gitDiff, inputBox, repoPath?): Promise<void>`
 核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `tokenrhythm.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `tokenrhythm.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `tokenrhythm.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → 余额预检（cookie）→ `createMessage` 流式消费；`failedKeys` 跟踪每个 key 失败原因，全部 key 用尽时（`failedKeys.size >= totalKeys`）报错列出脱敏 key+原因并区分瞬态（429/503→"请稍后重试"）与确定性（→"用管理命令检测"）；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容；轮换原因经 `getKeyRotationReason` 提取，修复了原固定 `api_error` 导致 429/503 被持久化为不可用的 bug）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）；single 模式的 fallback=switch 同样仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`shouldSingleKeyFallbackSwitch` 判定），其他错误不切换、走 single 专属报错文案；用户取消立即中止。

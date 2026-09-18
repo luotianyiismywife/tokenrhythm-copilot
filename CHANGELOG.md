@@ -1,5 +1,13 @@
 # 更新日志（Changelog）
 
+## v1.12.2 (2026-09-18)
+
+### 移除无 API Key 时的所有自动弹窗
+
+- **聊天请求静默失败**：使用本插件模型发消息且未配置任何 API Key 时，不再弹出输入框引导添加 key——`ensureApiKey()` 改为静默返回，请求直接失败并在聊天中内联展示 "TokenRhythm API key not found" 错误。添加 key 统一走命令面板的「管理 API Keys」（`tokenrhythm.manageApiKeys`）或「设置 API Key」（`tokenrhythm.setApiKey`）命令。
+- **Git 提交消息生成静默失败**：生成提交消息且无 key 时同样不再弹输入框，`ensureApiKeyEntry()` 静默返回，由调用方抛出既有错误通知。
+- **欢迎向导不再自动弹出**：移除首次安装（且未配置 key）时自动打开 Walkthrough 引导页的逻辑（`showWelcomeIfNeeded` 及相关 globalState 标记）。向导页面本身保留，仍可从命令面板（Welcome: Open Walkthrough）手动打开。未配置 key 时扩展启动完全静默，不弹任何界面。
+
 ## v1.12.1 (2026-09-04)
 
 ### single 模式自动切换收窄为仅余额不足

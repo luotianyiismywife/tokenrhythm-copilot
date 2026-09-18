@@ -50,7 +50,6 @@ import {
     resetExhaustedKeys,
     setActiveKeyByValue,
     shouldSingleKeyFallbackSwitch,
-    addApiKey,
     maskApiKey,
     type ApiKeyEntry,
 } from "./keyManager";
@@ -1492,28 +1491,15 @@ export class TokenRhythmChatModelProvider implements LanguageModelChatProvider {
     }
 
     /**
-     * Ensure at least one API key exists. When no key is configured, prompts the
-     * user to enter one (saved into the multi-key store). Returns the first key
-     * entry if any exists, undefined otherwise.
+     * Return the active (or first) API key entry if any exists, undefined
+     * otherwise. No UI prompt — when no key is configured the request simply
+     * fails with the "API key not found" error; keys are added via the
+     * Manage API Keys command.
      */
     private async ensureApiKey(): Promise<ApiKeyEntry | undefined> {
         const store = await getApiKeyStore(this.secrets);
         if (store.keys.length > 0) {
             return store.keys[store.activeIndex] ?? store.keys[0];
-        }
-
-        const entered = await vscode.window.showInputBox({
-            title: l10n("TokenRhythm Provider API Key"),
-            prompt: l10n("Enter your TokenRhythm API key"),
-            ignoreFocusOut: true,
-            password: true,
-        });
-        if (entered && entered.trim()) {
-            const added = await addApiKey(this.secrets, { value: entered.trim(), available: null });
-            if (added) {
-                const updated = await getApiKeyStore(this.secrets);
-                return updated.keys[0];
-            }
         }
         return undefined;
     }
