@@ -11,6 +11,9 @@
 > [!IMPORTANT]
 > **This is not affiliated with, officially maintained by, or endorsed by TokenRhythm.**
 
+> [!WARNING]
+> **This project is no longer actively maintained.** The TokenRhythm platform's promotional event has ended — a key that used to cost ¥18 now sells for nearly ¥3, so the author has given up on this project. Recommended alternatives: the author's **AMD TokenFactory Provider for Copilot** (`amdtokenfactory`, already published) or **NVIDIA NIM** (a plugin is currently in development). AMD accounts are also available from the author — feel free to reach out.
+
 Integrate [TokenRhythm](https://tokenrhythm.studio) models into GitHub Copilot Chat as a VS Code extension.
 
 ### Usage
@@ -154,6 +157,9 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 > [!IMPORTANT]
 > **本插件与 TokenRhythm 无关，也未获得其官方维护或认可。**
+
+> [!WARNING]
+> **本项目已停止维护。** 基元律动平台活动已结束——原价 18 元余额的 key 现在卖到了快 3 块，作者已放弃本项目。推荐替代：作者的 **AMD TokenFactory Provider for Copilot**（`amdtokenfactory`，已发布）或 **英伟达 NIM**（作者正在开发插件）。AMD 的账号作者也有售，欢迎联系。
 
 将 [TokenRhythm](https://tokenrhythm.studio) 模型集成到 GitHub Copilot Chat 的 VS Code 插件。
 
