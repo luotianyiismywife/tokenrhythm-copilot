@@ -2,7 +2,7 @@
 	"name": "tokenrhythm-copilot-provider",
 	"publisher": "luotianyiismywife",
 	"displayName": "TokenRhythm Provider for Copilot",
-	"description": "Integrate TokenRhythm models into GitHub Copilot Chat",
+	"description": "[UNMAINTAINED] Integrate TokenRhythm models into GitHub Copilot Chat. Platform promo ended & resale prices skyrocketed — see README for alternatives (amdtokenfactory / NVIDIA NIM).",
 	"keywords": [
 		"ai",
 		"chat",
@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/tokenrhythm-copilot/issues"
 	},
-	"version": "1.12.2",
+	"version": "1.12.3",
 	"engines": {
 		"vscode": "^1.116.0"
 	},

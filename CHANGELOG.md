@@ -1,5 +1,12 @@
 # 更新日志（Changelog）
 
+## v1.12.3 (2026-09-18)
+
+### 停维护声明
+
+- **README 新增停维护警告**：基元律动平台活动已结束，咸鱼转卖价大幅暴涨（18 元额度的 key 现在卖到快 3 块，此前 68 元余额都卖不到 2 元），作者已放弃本项目。推荐替代：作者的 **AMD TokenFactory Provider for Copilot**（`amdtokenfactory`，已发布）或 **英伟达 NIM**（插件开发中）。AMD 的账号作者也有售。
+- **市场简介同步更新**：扩展 description 标注 `[UNMAINTAINED]` 并指向 README 中的替代方案，市场页面与扩展列表同步展示。
+
 ## v1.12.2 (2026-09-18)
 
 ### 移除无 API Key 时的所有自动弹窗
